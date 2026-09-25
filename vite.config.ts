@@ -8,6 +8,8 @@ import { defineConfig } from "vite";
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
+  // Pages serves project sites under /repository-name/; local previews stay at /.
+  base: process.env.VITE_BASE_PATH || "/",
   plugins: [
     tanstackRouter({ target: "react", autoCodeSplitting: true }),
     react(),
