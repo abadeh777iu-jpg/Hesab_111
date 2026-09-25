@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.vite/
+.venv/
+*.local
+.DS_Store
+test-results/
+playwright-report/
+
+.tanstack/
