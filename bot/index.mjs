@@ -1,4 +1,4 @@
-import { complete, ConversationStore, DISCLOSURE, PRIVACY, splitMessage } from './core.mjs';
+import { complete, ConversationStore, DISCLOSURE, PRIVACY, splitMessage, START_GREETING } from './core.mjs';
 import { formatReply } from './format.mjs';
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
@@ -60,7 +60,7 @@ async function handle(message) {
   const command = text?.split(/\s/)[0].split('@')[0].toLowerCase();
   if (command === '/start') {
     store.clear(id);
-    await send(chat, DISCLOSURE);
+    await send(chat, START_GREETING);
     return;
   }
   if (command === '/reset') {
@@ -73,9 +73,10 @@ async function handle(message) {
     await send(chat, 'احوال‌پرسی زمان‌بندی‌شده فقط در نسخهٔ Cloudflare فعاله؛ نسخهٔ محلی پیگیری خودکار نداره.');
     return;
   }
+  if (command === '/about') { await send(chat, DISCLOSURE); return; }
   if (command === '/privacy') { await send(chat, PRIVACY); return; }
   if (command === '/help') {
-    await send(chat, 'برای گفتگو یک پیام متنی بفرست.\n/start معرفی و شروع دوباره\n/reset پاک‌کردن حافظهٔ گفتگو\n/privacy حریم خصوصی\n\nاین ربات جایگزین درمانگر یا خدمات اضطراری نیست.');
+    await send(chat, 'برای گفتگو یک پیام متنی بفرست.\n/start سلام و شروع دوباره\n/about دربارهٔ امیر\n/reset پاک‌کردن حافظهٔ گفتگو\n/privacy حریم خصوصی\n\nاین ربات جایگزین درمانگر یا خدمات اضطراری نیست.');
     return;
   }
   if (!text) { await send(chat, 'فعلاً فقط پیام متنی رو می‌تونم بخونم 🌱'); return; }
@@ -86,8 +87,8 @@ async function handle(message) {
   }
   cooldowns.set(id, Date.now());
   const history = [...store.get(id), { role: 'user', content: text }];
-  // Disclosure is shown even when the user starts chatting without /start.
-  if (history.length === 1) await send(chat, DISCLOSURE);
+  // A short greeting also works when the user skips /start. Details are in /about and /privacy.
+  if (history.length === 1) await send(chat, START_GREETING);
   await telegram('sendChatAction', { chat_id: chat, action: 'typing' }).catch(() => {});
   try {
     const answer = await complete({ apiKey, model, messages: history, style: process.env.BOT_STYLE });

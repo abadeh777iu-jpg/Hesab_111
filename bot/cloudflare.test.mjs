@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createWorker, ChatSession, FOLLOWUP_DELAY, FOLLOWUP_TEXT } from './cloudflare.mjs';
+import { START_GREETING } from './core.mjs';
 
 function update(id = 1, text = 'سلام', user = 42) {
   return { update_id: id, message: { chat: { id: user, type: 'private' }, from: { id: user }, text } };
@@ -60,7 +61,7 @@ test('invalid updates, oversized bodies, groups and unauthorized users never rea
   assert.equal(calls.length, 0);
 });
 
-test('verified private message gets disclosure, reply, bounded stored history and cleanup alarm', async () => {
+test('verified private message gets a short greeting, reply, bounded stored history and cleanup alarm', async () => {
   const worker = createWorker();
   const { env, state, calls, alarmAt } = setup();
   assert.equal((await worker.fetch(request(update()), env)).status, 200);
@@ -68,10 +69,7 @@ test('verified private message gets disclosure, reply, bounded stored history an
   assert.equal(completions.length, 1);
   assert.equal(completions[0].body.messages[1].content, 'سلام');
   const sent = calls.filter(c => c.url.includes('sendMessage'));
-  assert.ok(sent[0].body.text.startsWith('سلام، من امیرم'));
-  assert.ok(sent[0].body.text.includes('هوش مصنوعی'));
-  assert.ok(sent[0].body.text.includes('پاسخ زندهٔ شخص امیر نیست'));
-  assert.ok(sent[0].body.text.includes('کلودفلر'));
+  assert.equal(sent[0].body.text, START_GREETING);
   assert.equal(state.get('session').messages.length, 2);
   assert.ok(alarmAt() > Date.now());
 });
@@ -124,7 +122,7 @@ test('provider failure produces generic error and retries do not charge again', 
 test('commands and non-text input do not call model', async () => {
   const worker = createWorker();
   const { env, calls } = setup();
-  for (const [index, text] of ['/start', '/privacy', '/help', '/reset', '', 'x'.repeat(6001)].entries()) {
+  for (const [index, text] of ['/start', '/about', '/privacy', '/help', '/reset', '', 'x'.repeat(6001)].entries()) {
     await worker.fetch(request(update(index, text)), env);
   }
   assert.equal(calls.filter(c => c.url.includes('openrouter.ai')).length, 0);
@@ -259,4 +257,39 @@ test('Cloudflare opinion replies use escaped native Telegram blockquotes', async
   assert.ok(reply.text.includes('<blockquote>'));
   assert.ok(reply.text.includes('&lt;قدم اول&gt;'));
   assert.ok(!reply.text.includes('[OPINION]'));
+});
+
+test('/start sends only one short greeting, with no AI call or privacy wall', async () => {
+  const { env, calls, state } = setup();
+  await createWorker().fetch(request(update(1, '/start')), env);
+  assert.equal(calls.length, 1);
+  assert.ok(calls[0].url.endsWith('/sendMessage'));
+  assert.equal(calls[0].body.text, START_GREETING);
+  assert.deepEqual(state.get('session').messages, []);
+});
+
+test('/about and /privacy retain identity and data disclosures on demand', async () => {
+  const { env, calls } = setup();
+  const worker = createWorker();
+  await worker.fetch(request(update(1, '/about')), env);
+  assert.equal(calls.length, 1);
+  assert.ok(calls[0].body.text.includes('هوش مصنوعی'));
+  assert.ok(calls[0].body.text.includes('پاسخ زندهٔ شخص امیر نیست'));
+  await worker.fetch(request(update(2, '/privacy')), env);
+  assert.equal(calls.length, 2);
+  assert.ok(calls[1].body.text.includes('۳۰ پیام'));
+  assert.ok(calls[1].body.text.includes('OpenRouter'));
+  assert.ok(calls[1].body.text.includes('/stop'));
+});
+
+test('text after /start does not trigger another greeting or explanation', async () => {
+  const { env, calls } = setup();
+  const worker = createWorker();
+  await worker.fetch(request(update(1, '/start')), env);
+  calls.length = 0;
+  await worker.fetch(request(update(2, 'سلام، خوبم')), env);
+  assert.equal(calls.filter(call => call.url.includes('openrouter.ai')).length, 1);
+  const sent = calls.filter(call => call.url.includes('sendMessage'));
+  assert.equal(sent.length, 1);
+  assert.ok(!sent[0].body.text.includes('OpenRouter'));
 });

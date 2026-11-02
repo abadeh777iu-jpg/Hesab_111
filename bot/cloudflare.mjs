@@ -1,4 +1,4 @@
-import { complete, splitMessage, PERSONA_GREETING, HISTORY_LIMIT } from './core.mjs';
+import { complete, splitMessage, PERSONA_GREETING, HISTORY_LIMIT, START_GREETING } from './core.mjs';
 import { handleSetup } from './setup.mjs';
 import { formatReply } from './format.mjs';
 
@@ -6,7 +6,7 @@ const TTL = 30 * 60_000;
 export const FOLLOWUP_DELAY = 24 * 60 * 60_000;
 export const FOLLOWUP_TEXT = 'سلام رفیق 🌱🙂 گفتم یه احوالی بپرسم؛ امروز چطوری؟ اگه دوست داشتی از حال و کارت بگو 💬✨\n\nلغو احوال‌پرسی: /stop';
 export const CLOUD_PRIVACY = 'پیام‌ها برای پاسخ به OpenRouter و ارائه‌دهندهٔ مدل ارسال می‌شن. حداکثر ۳۰ پیام اخیر در فضای خصوصی Durable Objects کلودفلر ذخیره می‌شه و پس از ۳۰ دقیقه بی‌فعالیتی یا /reset از حافظهٔ فعال برنامه حذف می‌شه. سیاست نگهداری و نسخه‌های پشتیبان سرویس‌ها جداست. این فرمان پیام‌های تلگرام یا داده‌های ارائه‌دهندهٔ مدل رو حذف نمی‌کنه. متن گفتگو در لاگ برنامه ثبت نمی‌شه. اگر /followup را فعال کنی، شناسهٔ چت و زمان احوال‌پرسی جدا از متن گفتگو تا /stop یا /reset نگه داشته می‌شه؛ یک احوال‌پرسی عمومی حدود ۲۴ ساعت بعد از آخرین پیام متنی می‌فرستیم. لطفاً اطلاعات حساس نفرست.';
-const INTRO = `${PERSONA_GREETING}\n\n${CLOUD_PRIVACY}\n\nاحوال‌پرسی فردا اختیاریه: /followup — لغو: /stop\n\nاین روزها مشغول چه کاری هستی و کجاش گیر کردی؟`;
+const ABOUT = `${PERSONA_GREETING}\n\n${CLOUD_PRIVACY}\n\nاحوال‌پرسی فردا اختیاریه: /followup — لغو: /stop\n\nاین روزها مشغول چه کاری هستی و کجاش گیر کردی؟`;
 const FAILURE = 'الان نتونستم پاسخ رو آماده یا ارسال کنم. لطفاً کمی بعد دوباره پیام بده. اگر در خطر فوری هستی، منتظر ربات نمون و با خدمات اضطراری محل یا یک فرد مطمئن تماس بگیر.';
 const ok = () => new Response('OK');
 
@@ -159,7 +159,7 @@ export class ChatSession {
         record.lastAt = 0;
         record.introduced = command === '/start';
         await this.persist(record);
-        await this.send(chat, command === '/start' ? INTRO : 'سابقهٔ فعال پاک شد و احوال‌پرسی خودکار هم خاموش شد 🌱 پیام‌های تلگرام و سرویس مدل پاک نمی‌شن.');
+        await this.send(chat, command === '/start' ? START_GREETING : 'سابقهٔ فعال پاک شد و احوال‌پرسی خودکار هم خاموش شد 🌱 پیام‌های تلگرام و سرویس مدل پاک نمی‌شن.');
         return ok();
       }
       if (command === '/followup') {
@@ -173,9 +173,10 @@ export class ChatSession {
         await this.send(chat, 'احوال‌پرسی خودکار خاموش شد ✅🌱 هر وقت خواستی دوباره /followup رو بفرست.');
         return ok();
       }
+      if (command === '/about') { await this.send(chat, ABOUT); return ok(); }
       if (command === '/privacy') { await this.send(chat, CLOUD_PRIVACY); return ok(); }
       if (command === '/help') {
-        await this.send(chat, '/start معرفی و شروع دوباره\n/reset پاک‌کردن حافظهٔ فعال گفتگو\n/privacy حریم خصوصی\n/followup فعال‌کردن احوال‌پرسی ۲۴ ساعت بعد\n/stop لغو احوال‌پرسی\n\nفقط متن در چت خصوصی. من هوش مصنوعی‌ام و جایگزین درمانگر یا خدمات اضطراری نیستم.');
+        await this.send(chat, '/start سلام و شروع دوباره\n/about دربارهٔ امیر\n/reset پاک‌کردن حافظهٔ فعال گفتگو\n/privacy حریم خصوصی\n/followup فعال‌کردن احوال‌پرسی ۲۴ ساعت بعد\n/stop لغو احوال‌پرسی\n\nفقط متن در چت خصوصی. من هوش مصنوعی‌ام و جایگزین درمانگر یا خدمات اضطراری نیستم.');
         return ok();
       }
       if (!text) { await this.send(chat, 'فعلاً فقط پیام متنی رو می‌تونم بخونم 🌱'); return ok(); }
@@ -185,7 +186,7 @@ export class ChatSession {
       if (await this.ctx.storage.get('followup')) await this.armFollowup(chat, record);
       await this.persist(record);
       if (!record.introduced) {
-        await this.send(chat, INTRO);
+        await this.send(chat, START_GREETING);
         record.introduced = true;
         await this.persist(record);
       }
