@@ -1,3 +1,4 @@
+export const OUTREACH_NOTICE = 'گاهی یه پیام می‌دم و احوالت رو می‌پرسم 🌱 اگه نخواستی: /stop';
 export const START_GREETING = 'سلام، چطوری؟ 🙂🌱';
 export const HISTORY_LIMIT = 30;
 export const MAX_REPLY_TOKENS = 320;

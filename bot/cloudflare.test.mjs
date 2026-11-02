@@ -420,7 +420,7 @@ test('first start automatically enrolls Abadeh weather after one combined notice
   await createWorker().fetch(request(update(1, '/start')), env);
   assert.equal(calls.length, 1);
   assert.equal(calls[0].body.text, `${START_GREETING}\n\n${FOLLOWUP_NOTICE}`);
-  assert.ok(calls[0].body.text.includes('آباده'));
+  assert.ok(!/هوا|باران|برف|آباده/.test(calls[0].body.text));
   assert.equal(state.get('weather').city.name, 'آباده، استان فارس');
   assert.equal(state.get('weather').alertsEnabled, true);
 });
@@ -431,7 +431,7 @@ test('existing conversations receive a brief weather notice once, without a city
   const worker = createWorker();
   await worker.fetch(request(update(1, '/start')), env);
   assert.equal(calls.length, 2); // short hello + one new weather notice
-  assert.ok(calls[1].body.text.includes('آباده'));
+  assert.ok(!/هوا|باران|برف|آباده/.test(calls[1].body.text));
   assert.ok(!calls[1].body.text.includes('کدوم'));
   calls.length = 0;
   await worker.fetch(request(update(2, '/start')), env);

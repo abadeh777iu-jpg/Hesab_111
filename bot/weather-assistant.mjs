@@ -1,3 +1,5 @@
+import { OUTREACH_NOTICE } from './core.mjs';
+import { generateWeatherSentence } from './outreach-text.mjs';
 import { findCities, getWeather, upcomingPrecipitation, weatherSummary, weatherAlert, WEATHER_INTERVAL, isWeatherQuestion } from './live-data.mjs';
 
 // Approximate centre of Abadeh, Fars; this is an owner-selected default,
@@ -5,7 +7,7 @@ import { findCities, getWeather, upcomingPrecipitation, weatherSummary, weatherA
 export const DEFAULT_CITY = Object.freeze({
   name: 'آباده، استان فارس', latitude: 31.16, longitude: 52.65, timezone: 'Asia/Tehran',
 });
-export const WEATHER_NOTICE = 'گاهی خبر هوای آباده، فارس رو می‌فرستم 🌦️ اگه نخواستی: /stop';
+export const WEATHER_NOTICE = OUTREACH_NOTICE;
 
 const CANDIDATE_TTL = 10 * 60_000;
 export function nextWeatherWake(record) {
@@ -136,7 +138,9 @@ export class WeatherAssistant {
     record.lastAlertAt = Date.now();
     record.lastEventAt = event.at;
     await this.storage.put('weather', record); // claim before sending; no duplicate alarms
-    try { await this.send(record.chatId, weatherAlert(record.city, event, forecast.timezone)); }
+    const session = await this.storage.get('session');
+    const sentence = await generateWeatherSentence(this.env, event, session);
+    try { await this.send(record.chatId, weatherAlert(record.city, event, forecast.timezone, sentence)); }
     catch {
       await this.storage.put('weatherOptOut', true);
       record.alertsEnabled = false;

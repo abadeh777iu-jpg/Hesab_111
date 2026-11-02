@@ -50,7 +50,7 @@ test('weather alarms claim events once and have independent persistent schedulin
   await assistant.alarm();
   assert.equal(sent.length, 1);
   assert.ok(sent[0].text.includes('احتمال باران'));
-  assert.ok(sent[0].text.includes('🌱'));
+  assert.ok(sent[0].text.includes('Open-Meteo'));
   assert.equal(state.get('weather').nextCheckAt, now + WEATHER_INTERVAL);
   const before = calls.length;
   now += WEATHER_INTERVAL;
@@ -135,7 +135,7 @@ test('automatic default alerts require a delivered notice and do not repeat it',
   const { state, sent, calls, assistant } = setup();
   await assistant.ensureAutomatic(42);
   assert.equal(sent.length, 1);
-  assert.ok(sent[0].text.includes('آباده'));
+  assert.ok(!/هوا|باران|برف|آباده/.test(sent[0].text));
   assert.ok(sent[0].text.includes('/stop'));
   assert.equal(state.get('weather').city.name, 'آباده، استان فارس');
   assert.equal(state.get('weather').alertsEnabled, true);
@@ -174,4 +174,47 @@ test('failed automatic default disclosure does not enable alerts', async () => {
   assistant.send = async () => { throw new Error('delivery failed'); };
   await assert.rejects(assistant.ensureAutomatic(42));
   assert.equal(state.has('weather'), false);
+});
+
+test('eligible alerts generate a fresh AI sentence, while duplicate alarms cause no extra model calls', async t => {
+  let now = 1_800_000_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const { state, sent, env, assistant } = setup();
+  const original = env.fetchImpl;
+  let generations = 0;
+  env.OPENROUTER_API_KEY = 'key'; env.OPENROUTER_MODEL = 'model';
+  env.fetchImpl = async (url, options) => {
+    if (url.includes('openrouter.ai')) {
+      generations++;
+      return new Response(JSON.stringify({ choices: [{ message: { content: 'گاهی یه نفس آروم، شروع یه حال تازه‌ست 🌱' } }] }));
+    }
+    return original(url, options);
+  };
+  await assistant.ensureAutomatic(42, true);
+  sent.length = 0;
+  now += 1000;
+  await assistant.alarm();
+  await assistant.alarm();
+  assert.equal(generations, 1);
+  assert.equal(sent.length, 1);
+  assert.ok(sent[0].text.includes('گاهی یه نفس آروم'));
+  assert.ok(sent[0].text.includes('Open-Meteo'));
+  assert.ok(!JSON.stringify(state.get('weather')).includes('یه نفس آروم')); // no new permanent profile/text
+});
+
+test('a failed AI sentence request cannot suppress a factual weather alert', async t => {
+  let now = 1_800_000_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const { sent, env, assistant } = setup();
+  const original = env.fetchImpl;
+  env.OPENROUTER_API_KEY = 'key'; env.OPENROUTER_MODEL = 'model';
+  env.fetchImpl = async (url, options) => url.includes('openrouter.ai') ? new Response('{}', { status: 503 }) : original(url, options);
+  await assistant.ensureAutomatic(42, true);
+  sent.length = 0;
+  now += 1000;
+  await assistant.alarm();
+  assert.equal(sent.length, 1);
+  assert.ok(sent[0].text.includes('احتمال باران'));
+  assert.ok(!sent[0].text.includes('undefined'));
+  assert.ok(!sent[0].text.includes('null'));
 });
