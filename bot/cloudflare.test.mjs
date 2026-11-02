@@ -66,7 +66,9 @@ test('verified private message gets disclosure, reply, bounded stored history an
   assert.equal(completions.length, 1);
   assert.equal(completions[0].body.messages[1].content, 'سلام');
   const sent = calls.filter(c => c.url.includes('sendMessage'));
+  assert.ok(sent[0].body.text.startsWith('سلام، من امیرم'));
   assert.ok(sent[0].body.text.includes('هوش مصنوعی'));
+  assert.ok(sent[0].body.text.includes('پاسخ زندهٔ شخص امیر نیست'));
   assert.ok(sent[0].body.text.includes('کلودفلر'));
   assert.equal(state.get('session').messages.length, 2);
   assert.ok(alarmAt() > Date.now());

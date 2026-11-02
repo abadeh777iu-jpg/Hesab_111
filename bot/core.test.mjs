@@ -68,3 +68,24 @@ test('empty responses are rejected instead of sent to Telegram', async () => {
     }), /empty response/);
   }
 });
+
+test('Amir persona distinguishes a display name from a real human identity', () => {
+  const prompt = systemPrompt();
+  assert.ok(prompt.includes('نام شخصیت گفت‌وگوی تو «امیر»'));
+  assert.ok(prompt.includes('بگو «امیرم»'));
+  assert.ok(prompt.includes('خودِ شخص امیر نیستم'));
+  assert.ok(prompt.includes('جعل نکن'));
+  assert.ok(DISCLOSURE.startsWith('سلام، من امیرم'));
+  assert.ok(DISCLOSURE.includes('با هوش مصنوعی'));
+  assert.ok(DISCLOSURE.includes('پاسخ زندهٔ شخص امیر نیست'));
+});
+
+test('work coaching emphasizes actionable hope without shaming or overriding crisis support', () => {
+  const prompt = systemPrompt();
+  assert.ok(prompt.includes('کار واقعی خودش'));
+  assert.ok(prompt.includes('۵ تا ۱۰ دقیقه'));
+  assert.ok(prompt.includes('فقط یک سؤال مرتبط'));
+  assert.ok(prompt.includes('تنبلی ننام'));
+  assert.ok(prompt.includes('ایمنی از بهره‌وری و انگیزه مهم‌تر است'));
+  assert.ok(prompt.includes('خدمات اضطراری'));
+});
