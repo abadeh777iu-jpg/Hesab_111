@@ -1,12 +1,14 @@
 import { complete, splitMessage, PERSONA_GREETING, HISTORY_LIMIT, START_GREETING } from './core.mjs';
 import { handleSetup } from './setup.mjs';
 import { formatReply } from './format.mjs';
+import { WeatherAssistant, nextWeatherWake } from './weather-assistant.mjs';
+import { isMarketQuestion, isWeatherQuestion } from './live-data.mjs';
 
 const TTL = 30 * 60_000;
 export const FOLLOWUP_NOTICE = 'گاهی میام یه احوالی ازت می‌پرسم 🌱 اگه نخواستی: /stop';
 export const FOLLOWUP_DELAY = 24 * 60 * 60_000;
 export const FOLLOWUP_TEXT = 'سلام رفیق، امروز چطوری؟ 🙂🌱\n\nلغو احوال‌پرسی: /stop';
-export const CLOUD_PRIVACY = 'پیام‌ها برای پاسخ به OpenRouter و ارائه‌دهندهٔ مدل ارسال می‌شن. حداکثر ۳۰ پیام اخیر در کلودفلر نگه داشته و بعد از ۳۰ دقیقه بی‌فعالیتی یا /reset از حافظهٔ فعال حذف می‌شن. احوال‌پرسی پس از اطلاع کوتاه در گفتگو خودکار فعاله؛ حدود ۲۴ ساعت بعد از آخرین پیام، یک پیام عمومی می‌فرستیم، نه پیام تکراری روزانه. لغو: /stop — فعال‌سازی دوباره: /followup. شناسهٔ چت و زمان ارسال جدا از متن گفتگو ذخیره می‌شن؛ با لغو، این دو حذف و فقط ترجیح خاموشی نگه داشته می‌شه تا با پیام جدید یا /start دوباره فعال نشه. /reset هم پیگیری رو خاموش می‌کنه. پیام‌های تلگرام، داده‌های سرویس مدل و نسخه‌های پشتیبان تابع سیاست همون سرویس‌ها هستن. لطفاً اطلاعات حساس نفرست.';
+export const CLOUD_PRIVACY = 'پیام‌ها برای پاسخ به OpenRouter و ارائه‌دهندهٔ مدل ارسال می‌شن. حداکثر ۳۰ پیام اخیر در کلودفلر نگه داشته و بعد از ۳۰ دقیقه بی‌فعالیتی یا /reset از حافظهٔ فعال حذف می‌شن. احوال‌پرسی پس از اطلاع کوتاه در گفتگو خودکار فعاله؛ حدود ۲۴ ساعت بعد از آخرین پیام، یک پیام عمومی می‌فرستیم، نه پیام تکراری روزانه. لغو: /stop — فعال‌سازی دوباره: /followup. شناسهٔ چت و زمان ارسال جدا از متن گفتگو ذخیره می‌شن؛ با لغو، این دو حذف و فقط ترجیح خاموشی نگه داشته می‌شه تا با پیام جدید یا /start دوباره فعال نشه. /reset هم پیگیری رو خاموش می‌کنه. پیام‌های تلگرام، داده‌های سرویس مدل و نسخه‌های پشتیبان تابع سیاست همون سرویس‌ها هستن. شهر انتخابی و مختصات تقریبی آن جداگانه برای هوا نگه داشته و به Open-Meteo ارسال می‌شه؛ حذف شهر و هشدارها: /forgetcity یا /reset. /stop همهٔ پیام‌های خودکار رو خاموش می‌کنه. لطفاً اطلاعات حساس نفرست.';
 const ABOUT = `${PERSONA_GREETING}\n\n${CLOUD_PRIVACY}\n\nلغو احوال‌پرسی: /stop — فعال‌سازی دوباره: /followup\n\nاین روزها مشغول چه کاری هستی و کجاش گیر کردی؟`;
 const FAILURE = 'الان نتونستم پاسخ رو آماده یا ارسال کنم. لطفاً کمی بعد دوباره پیام بده. اگر در خطر فوری هستی، منتظر ربات نمون و با خدمات اضطراری محل یا یک فرد مطمئن تماس بگیر.';
 const ok = () => new Response('OK');
@@ -76,6 +78,7 @@ export class ChatSession {
     this.ctx = ctx;
     this.env = env;
     this.queue = Promise.resolve();
+    this.weather = new WeatherAssistant(ctx.storage, env, (chat, text) => this.send(chat, text), () => this.scheduleAlarm());
   }
   fetch(request) {
     const task = this.queue.then(async () => this.process(await request.json()));
@@ -100,6 +103,7 @@ export class ChatSession {
           await this.disableFollowup();
         }
       }
+      await this.weather.alarm();
       await this.scheduleAlarm();
     });
     this.queue = task.catch(() => {});
@@ -108,13 +112,15 @@ export class ChatSession {
   async scheduleAlarm() {
     const record = await this.ctx.storage.get('session');
     const followup = await this.ctx.storage.get('followup');
-    const times = [record?.expiresAt, (followup?.disabled ? null : followup?.dueAt)].filter(time => Number.isFinite(time) && time > 0);
+    const weather = await this.ctx.storage.get('weather');
+    const times = [record?.expiresAt, (followup?.disabled ? null : followup?.dueAt), nextWeatherWake(weather)].filter(time => Number.isFinite(time) && time > 0);
     if (times.length) await this.ctx.storage.setAlarm(Math.min(...times));
     else await this.ctx.storage.deleteAlarm();
   }
   async armFollowup(chatId, record) {
     const followup = { chatId, dueAt: Date.now() + FOLLOWUP_DELAY, noticeShown: true, disabled: false };
-    await this.ctx.storage.setAlarm(Math.min(record.expiresAt, followup.dueAt));
+    const weather = await this.ctx.storage.get('weather');
+    await this.ctx.storage.setAlarm(Math.min(record.expiresAt, followup.dueAt, nextWeatherWake(weather) || Infinity));
     await this.ctx.storage.put('followup', followup);
   }
   async disableFollowup() {
@@ -156,7 +162,8 @@ export class ChatSession {
     // Set the cleanup alarm before writing sensitive data; a failed write leaves
     // only a harmless alarm, not stored data with no scheduled cleanup.
     const followup = await this.ctx.storage.get('followup');
-    await this.ctx.storage.setAlarm(Math.min(record.expiresAt, (followup?.disabled ? Infinity : followup?.dueAt || Infinity)));
+    const weather = await this.ctx.storage.get('weather');
+    await this.ctx.storage.setAlarm(Math.min(record.expiresAt, (followup?.disabled ? Infinity : followup?.dueAt || Infinity), nextWeatherWake(weather) || Infinity));
     await this.ctx.storage.put('session', record);
   }
   async process(update) {
@@ -174,13 +181,16 @@ export class ChatSession {
     const command = text.split(/\s/)[0].split('@')[0].toLowerCase();
     try {
       if (command === '/reset' || command === '/start') {
-        if (command === '/reset') await this.disableFollowup();
+        if (command === '/reset') {
+          await this.disableFollowup();
+          await this.weather.stop(true);
+        }
         record.messages = [];
         record.lastAt = 0;
         record.introduced = command === '/start';
         await this.persist(record);
         if (command === '/start') await this.greet(chat, record);
-        else await this.send(chat, 'سابقهٔ فعال پاک شد و احوال‌پرسی خودکار هم خاموش شد 🌱 پیام‌های تلگرام و سرویس مدل پاک نمی‌شن.');
+        else await this.send(chat, 'سابقهٔ فعال و شهر پاک شد؛ همهٔ پیام‌های خودکار خاموش شد 🌱 پیام‌های تلگرام و سرویس مدل پاک نمی‌شن.');
         return ok();
       }
       if (command === '/followup') {
@@ -190,18 +200,45 @@ export class ChatSession {
       }
       if (command === '/stop') {
         await this.disableFollowup();
+        await this.weather.stop();
         await this.scheduleAlarm();
-        await this.send(chat, 'احوال‌پرسی خودکار خاموش شد ✅🌱 هر وقت خواستی دوباره /followup رو بفرست.');
+        await this.send(chat, 'همهٔ پیام‌های خودکار خاموش شد ✅🌱 احوال‌پرسی: /followup — هشدار هوا: /alerts');
         return ok();
       }
       if (command === '/about') { await this.send(chat, ABOUT); return ok(); }
       if (command === '/privacy') { await this.send(chat, CLOUD_PRIVACY); return ok(); }
       if (command === '/help') {
-        await this.send(chat, '/start سلام و شروع دوباره\n/about دربارهٔ امیر\n/reset پاک‌کردن حافظهٔ فعال گفتگو\n/privacy حریم خصوصی\n/followup فعال‌سازی دوبارهٔ احوال‌پرسی\n/stop لغو احوال‌پرسی\n\nفقط متن در چت خصوصی. من هوش مصنوعی‌ام و جایگزین درمانگر یا خدمات اضطراری نیستم.');
+        await this.send(chat, '/start سلام و شروع دوباره\n/about دربارهٔ امیر\n/reset پاک‌کردن حافظهٔ فعال گفتگو\n/privacy حریم خصوصی\n/followup فعال‌سازی دوبارهٔ احوال‌پرسی\n/stop لغو همهٔ پیام‌های خودکار\n/prices قیمت دلار و طلا\n/city نام شهر\n/weather وضعیت هوا\n/alerts فعال‌کردن هشدار بارش\n/weatherstop خاموش‌کردن هشدار هوا\n/forgetcity حذف شهر\n\nفقط متن در چت خصوصی. من هوش مصنوعی‌ام و جایگزین درمانگر یا خدمات اضطراری نیستم.');
+        return ok();
+      }
+      if (command === '/weatherstop' || command === '/forgetcity') {
+        await this.weather.handle(text, chat);
         return ok();
       }
       if (!text) { await this.send(chat, 'فعلاً فقط پیام متنی رو می‌تونم بخونم 🌱'); return ok(); }
       if (text.length > 6000) { await this.send(chat, 'لطفاً پیامت رو به بخش‌های کمتر از ۶۰۰۰ کاراکتر تقسیم کن.'); return ok(); }
+      const wantsPrices = command === '/prices' || isMarketQuestion(text);
+      const wantsWeather = ['/city', '/weather', '/alerts'].includes(command) || isWeatherQuestion(text);
+      if (wantsPrices || wantsWeather) {
+        if (Date.now() - (record.lastLiveAt || 0) < 4000) {
+          await this.send(chat, 'برای دریافت دادهٔ تازه چند ثانیه صبر کن 🌱');
+          return ok();
+        }
+        record.lastLiveAt = Date.now();
+        await this.persist(record);
+        if (wantsPrices) {
+          try {
+            const id = this.env.MARKETS.idFromName('iran-market');
+            const response = await this.env.MARKETS.get(id).fetch('https://market.internal/latest');
+            await this.send(chat, await response.text());
+          } catch {
+            await this.send(chat, 'الان منبع قیمت در دسترس نیست؛ قیمت حدسی نمی‌گم 🌱');
+          }
+        } else {
+          await this.weather.handle(text, chat);
+        }
+        return ok();
+      }
       if (Date.now() - record.lastAt < 4000) { await this.send(chat, 'لطفاً چند ثانیه صبر کن و دوباره پیام بده.'); return ok(); }
       record.lastAt = Date.now();
       await this.persist(record);

@@ -360,3 +360,57 @@ test('if first disclosure cannot be delivered, no automatic follow-up is armed',
   await session.alarm();
   assert.equal(attempts, before);
 });
+
+test('natural price questions use the shared market binding, not model guesses', async () => {
+  const { env, calls } = setup();
+  let feedCalls = 0;
+  env.MARKETS = { idFromName: name => name, get: () => ({ fetch: async () => {
+    feedCalls++; return new Response('نرخ معتبر منبع؛ زمان اعلام‌شده');
+  } }) };
+  await createWorker().fetch(request(update(1, 'قیمت دلار چنده؟')), env);
+  assert.equal(feedCalls, 1);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].body.text, 'نرخ معتبر منبع؛ زمان اعلام‌شده');
+});
+
+test('live query rate limiting avoids repeated external requests', async () => {
+  const { env, calls } = setup();
+  let feedCalls = 0;
+  env.MARKETS = { idFromName: name => name, get: () => ({ fetch: async () => { feedCalls++; return new Response('quote'); } }) };
+  const worker = createWorker();
+  await worker.fetch(request(update(1, '/prices')), env);
+  await worker.fetch(request(update(2, '/prices')), env);
+  assert.equal(feedCalls, 1);
+  assert.ok(calls.at(-1).body.text.includes('چند ثانیه'));
+});
+
+test('/stop disables all outreach while /reset also deletes the saved city', async () => {
+  for (const command of ['/stop', '/reset']) {
+    const { env, state } = setup();
+    state.set('weather', { city: { name: 'Tehran', latitude: 35.69, longitude: 51.39 }, chatId: 42, alertsEnabled: true, nextCheckAt: Date.now() + 1000 });
+    await createWorker().fetch(request(update(1, command)), env);
+    assert.equal(state.get('followup').disabled, true);
+    if (command === '/reset') assert.equal(state.has('weather'), false);
+    else {
+      assert.equal(state.get('weather').alertsEnabled, false);
+      assert.equal(state.get('weather').nextCheckAt, null);
+    }
+  }
+});
+
+test('chat activity and follow-up scheduling preserve the earlier weather alarm', async t => {
+  let now = 1_800_000_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const { env, state, alarmAt, session } = setup();
+  state.set('weather', { city: { name: 'Tehran', latitude: 35.69, longitude: 51.39 }, chatId: 42, alertsEnabled: true, nextCheckAt: now + 1000 });
+  await createWorker().fetch(request(update(1, '/start')), env);
+  assert.equal(alarmAt(), now + 1000);
+  now += 1000;
+  const original = env.fetchImpl;
+  env.fetchImpl = async (url, options) => url.includes('open-meteo')
+    ? new Response('{}', { status: 503 }) : original(url, options);
+  await session.alarm();
+  assert.equal(state.get('weather').nextCheckAt, now + 3600000);
+  assert.equal(state.get('followup').dueAt, now - 1000 + FOLLOWUP_DELAY);
+  assert.ok(alarmAt() < state.get('weather').nextCheckAt); // 30-minute history cleanup still wins
+});

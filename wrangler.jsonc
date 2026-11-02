@@ -8,7 +8,13 @@
   "keep_vars": true,
   "observability": { "enabled": false },
   "durable_objects": {
-    "bindings": [{ "name": "CHATS", "class_name": "ChatSession" }]
+    "bindings": [
+      { "name": "CHATS", "class_name": "ChatSession" },
+      { "name": "MARKETS", "class_name": "MarketFeed" }
+    ]
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ChatSession"] }]
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["ChatSession"] },
+    { "tag": "v2", "new_sqlite_classes": ["MarketFeed"] }
+  ]
 }

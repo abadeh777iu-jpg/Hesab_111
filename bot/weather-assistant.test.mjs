@@ -1,0 +1,119 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { WeatherAssistant, nextWeatherWake } from './weather-assistant.mjs';
+import { WEATHER_INTERVAL } from './live-data.mjs';
+
+function setup() {
+  const state = new Map();
+  const sent = [], calls = [];
+  const storage = { get: async key => structuredClone(state.get(key)), put: async (key, value) => state.set(key, structuredClone(value)), delete: async key => state.delete(key) };
+  const env = { TELEGRAM_ALLOWED_USER_IDS: '42', fetchImpl: async url => {
+    calls.push(url);
+    if (url.includes('geocoding')) return new Response(JSON.stringify({ results: [
+      { name: 'تهران', country: 'ایران', latitude: 35.6892, longitude: 51.389, timezone: 'Asia/Tehran' },
+    ] }));
+    const hour = Math.floor(Date.now() / 3600000) * 3600;
+    return new Response(JSON.stringify({ timezone: 'Asia/Tehran', current: { time: Math.floor(Date.now() / 1000), temperature_2m: 15, weather_code: 3 }, hourly: {
+      time: [hour, hour + 3600, hour + 7200], precipitation_probability: [0, 90, 90], rain: [0, 1, 1], snowfall: [0, 0, 0], weather_code: [3, 61, 61],
+    } }));
+  } };
+  const assistant = new WeatherAssistant(storage, env, async (chat, text) => sent.push({ chat, text }), async () => {});
+  return { state, sent, calls, env, assistant };
+}
+
+test('city selection is explicit and alerts do not activate until requested', async () => {
+  const { state, sent, calls, assistant } = setup();
+  await assistant.handle('/city تهران', 42);
+  assert.equal(state.get('weather').city, undefined);
+  assert.equal(state.get('weather').candidates.length, 1);
+  assert.ok(sent.at(-1).text.includes('/city 1'));
+  await assistant.handle('/city ۱', 42);
+  assert.equal(state.get('weather').city.latitude, 35.69);
+  assert.equal(state.get('weather').alertsEnabled, false);
+  await assistant.handle('/weather', 42);
+  assert.ok(sent.at(-1).text.includes('Open-Meteo'));
+  assert.ok(sent.at(-1).text.includes('زمان داده'));
+  assert.equal(calls.length, 2);
+});
+
+test('weather alarms claim events once and have independent persistent scheduling', async t => {
+  let now = 1_800_000_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const { state, sent, calls, assistant } = setup();
+  await assistant.handle('/city Tehran', 42);
+  await assistant.handle('/city 1', 42);
+  await assistant.handle('/alerts', 42);
+  assert.equal(nextWeatherWake(state.get('weather')), now + 1000);
+  sent.length = 0;
+  now += 1000;
+  await assistant.alarm();
+  await assistant.alarm();
+  assert.equal(sent.length, 1);
+  assert.ok(sent[0].text.includes('احتمال باران'));
+  assert.ok(sent[0].text.includes('🌱'));
+  assert.equal(state.get('weather').nextCheckAt, now + WEATHER_INTERVAL);
+  const before = calls.length;
+  now += WEATHER_INTERVAL;
+  await assistant.alarm();
+  assert.equal(calls.length, before + 1);
+  assert.equal(sent.length, 1); // continued rain / cooldown cannot spam
+});
+
+test('weather stop disables alerts; forgetting the city deletes coordinates and candidates', async () => {
+  const { state, assistant } = setup();
+  await assistant.handle('/city Tehran', 42);
+  await assistant.handle('/city 1', 42);
+  await assistant.handle('/alerts', 42);
+  await assistant.handle('/weatherstop', 42);
+  assert.equal(state.get('weather').alertsEnabled, false);
+  assert.equal(state.get('weather').nextCheckAt, null);
+  assert.equal(nextWeatherWake(state.get('weather')), null);
+  await assistant.handle('/forgetcity', 42);
+  assert.equal(state.has('weather'), false);
+});
+
+test('unconfirmed city choices expire and cannot silently change locations', async t => {
+  let now = 1_800_000_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const { state, sent, assistant } = setup();
+  await assistant.handle('/city Tehran', 42);
+  now += 11 * 60_000;
+  await assistant.handle('/city 1', 42);
+  assert.ok(sent.at(-1).text.includes('منقضی'));
+  await assistant.alarm();
+  assert.equal(state.has('weather'), false);
+});
+
+test('a provider outage produces no invented warning and leaves a bounded next check', async t => {
+  let now = 1_800_000_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const { state, sent, env, assistant } = setup();
+  await assistant.handle('/city Tehran', 42);
+  await assistant.handle('/city 1', 42);
+  await assistant.handle('/alerts', 42);
+  sent.length = 0;
+  env.fetchImpl = async () => { throw new Error('network private details'); };
+  now += 1000;
+  await assistant.alarm();
+  assert.equal(sent.length, 0);
+  assert.equal(state.get('weather').nextCheckAt, now + WEATHER_INTERVAL);
+});
+
+test('revoked access or blocked delivery disables weather outreach', async t => {
+  let now = 1_800_000_000_000;
+  t.mock.method(Date, 'now', () => now);
+  for (const mode of ['revoked', 'blocked']) {
+    const { state, sent, env, assistant } = setup();
+    await assistant.handle('/city Tehran', 42);
+    await assistant.handle('/city 1', 42);
+    await assistant.handle('/alerts', 42);
+    sent.length = 0;
+    if (mode === 'revoked') env.TELEGRAM_ALLOWED_USER_IDS = '99';
+    else assistant.send = async () => { throw new Error('Telegram 403'); };
+    now += 1000;
+    await assistant.alarm();
+    assert.equal(state.get('weather').alertsEnabled, false);
+    assert.equal(state.get('weather').nextCheckAt, null);
+    assert.equal(sent.length, 0);
+  }
+});
