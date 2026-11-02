@@ -11,7 +11,10 @@ export async function getJson(url, fetchImpl = fetch) {
   let response;
   try {
     response = await fetchImpl(url, {
-      signal: AbortSignal.timeout(10_000), redirect: 'error', headers: { Accept: 'application/json' },
+      // Workers supports only follow/manual, not the browser's error mode.
+      // manual keeps API-key URLs from being followed to another host; the
+      // non-2xx check below rejects redirects without reading their bodies.
+      signal: AbortSignal.timeout(10_000), redirect: 'manual', headers: { Accept: 'application/json' },
     });
   } catch (error) {
     throw new LiveDataError(['TimeoutError', 'AbortError'].includes(error?.name) ? 'TIMEOUT' : 'NETWORK');

@@ -75,7 +75,9 @@ test('unconfigured feed makes no upstream request; daily attempt budget includes
   assert.equal(attempts, 3);
 });
 
-test('forecast onsets require future hours, adequate probability and measurable precipitation', () => {
+test('forecast onsets require future hours, adequate probability and measurable precipitation', t => {
+  // Avoid depending on whether the real clock is within five minutes of an hour.
+  t.mock.method(Date, 'now', () => Date.UTC(2026, 10, 2, 12, 15));
   const data = forecast();
   const event = upcomingPrecipitation(data);
   assert.equal(event.kind, 'rain');
