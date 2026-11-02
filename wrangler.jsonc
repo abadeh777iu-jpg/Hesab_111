@@ -1,17 +1,14 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "hamrah-telegram-bot",
+  "name": "hesab-111",
   "main": "bot/worker.mjs",
   "compatibility_date": "2026-10-01",
   "workers_dev": true,
+  // Runtime variables are configured in the dashboard. Preserve them on deploy.
+  "keep_vars": true,
   "observability": { "enabled": false },
   "durable_objects": {
     "bindings": [{ "name": "CHATS", "class_name": "ChatSession" }]
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ChatSession"] }],
-  "vars": {
-    "OPENROUTER_MODEL": "",
-    "TELEGRAM_ALLOWED_USER_IDS": "",
-    "BOT_STYLE": "ملایم و خودمونی، جمله‌های کوتاه، بدون نصیحت عجولانه و ایموجی کم."
-  }
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ChatSession"] }]
 }

@@ -1,4 +1,5 @@
 import { complete, splitMessage } from './core.mjs';
+import { handleSetup } from './setup.mjs';
 
 const TTL = 30 * 60_000;
 export const CLOUD_PRIVACY = 'پیام‌ها برای پاسخ به OpenRouter و ارائه‌دهندهٔ مدل ارسال می‌شن. حداکثر ۱۲ پیام اخیر در فضای خصوصی Durable Objects کلودفلر ذخیره می‌شه و پس از ۳۰ دقیقه بی‌فعالیتی یا /reset از حافظهٔ فعال برنامه حذف می‌شه. سیاست نگهداری و نسخه‌های پشتیبان سرویس‌ها جداست. این فرمان پیام‌های تلگرام یا داده‌های ارائه‌دهندهٔ مدل رو حذف نمی‌کنه. متن گفتگو در لاگ برنامه ثبت نمی‌شه. لطفاً اطلاعات حساس نفرست.';
@@ -30,6 +31,7 @@ export function createWorker() {
     async fetch(request, env) {
       const url = new URL(request.url);
       if (request.method === 'GET' && url.pathname === '/') return new Response('Telegram support bot');
+      if (url.pathname === '/setup') return handleSetup(request, env);
       if (url.pathname !== '/webhook') return new Response('Not found', { status: 404 });
       if (request.method !== 'POST') return new Response('Method not allowed', { status: 405 });
       if (!env.TELEGRAM_WEBHOOK_SECRET || !env.TELEGRAM_BOT_TOKEN || !env.OPENROUTER_API_KEY || !env.OPENROUTER_MODEL || !env.TELEGRAM_ALLOWED_USER_IDS?.trim()) {
