@@ -124,10 +124,14 @@ export function weatherSummary(city, data) {
   const next = event ? `\nاحتمال ${event.kind === 'snow' ? 'برف ❄️' : 'باران 🌧️'} حوالی ${localTime(event.at, data.timezone)}: ${fa.format(event.probability)}٪` : '';
   return `${city.name}\n${weatherDescription(data.current.weather_code)} — ${fa.format(data.current.temperature_2m)}°C${next}\nزمان داده: ${localTime(data.current.time * 1000, data.timezone)}\nمنبع: Open-Meteo؛ پیش‌بینی قطعی نیست.`;
 }
-export function weatherAlert(city, event, timezone, sentence = null) {
+export function weatherAlert(city, event, timezone, sentence = null, isTest = false) {
   const kind = event.kind === 'snow' ? 'برف ❄️' : 'باران 🌧️';
   const care = event.severe ? 'احتمال بارش شدید؛ قبل از بیرون‌رفتن هشدارهای رسمی رو چک کن ⚠️' : 'اگر بیرون میری، آماده باش 🙂';
-  return `${city.name}: احتمال ${kind} حوالی ${localTime(event.at, timezone)}، ${fa.format(event.probability)}٪\n${care}${sentence ? `\n${sentence}` : ''}\nمنبع: Open-Meteo؛ پیش‌بینی ممکنه تغییر کنه.\nلغو: /weatherstop`;
+  const header = isTest ? '🧪 آزمایشی — این خبر واقعی برف نیست\n\n' : '';
+  const footer = isTest
+    ? 'زمان و احتمال بالا ساختگی‌اند؛ منبع هوا فراخوانی نشده.\nاین تست هشدارها یا شهر ذخیره‌شده رو تغییر نمی‌ده.'
+    : 'منبع: Open-Meteo؛ پیش‌بینی ممکنه تغییر کنه.\nلغو: /weatherstop';
+  return `${header}${city.name}: احتمال ${kind} حوالی ${localTime(event.at, timezone)}، ${fa.format(event.probability)}٪\n${care}${sentence ? `\n${sentence}` : ''}\n${footer}`;
 }
 
 function positivePrice(quote, unit) {

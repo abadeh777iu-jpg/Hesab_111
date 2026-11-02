@@ -450,3 +450,33 @@ test('automatic Abadeh alerts do not reactivate after /stop or /reset and a new 
     assert.ok(!state.get('weather')?.alertsEnabled);
   }
 });
+
+test('/test_snow sends only to its requesting chat, without enrolling or changing subscriptions', async () => {
+  const { env, state, calls } = setup();
+  await createWorker().fetch(request(update(1, '/test_snow 99')), env);
+  const sent = calls.filter(call => call.url.endsWith('/sendMessage'));
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].body.chat_id, 42); // extra arguments cannot redirect a test
+  assert.ok(sent[0].body.text.startsWith('🧪 آزمایشی'));
+  assert.equal(state.has('weather'), false);
+  assert.equal(state.has('followup'), false);
+  assert.ok(state.has('snowPreview'));
+  assert.equal(calls.filter(call => call.url.includes('open-meteo')).length, 0);
+});
+
+test('snow preview metadata gets a cleanup alarm independent of conversation history', async t => {
+  let now = 1_800_000_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const { env, state, calls, session, alarmAt } = setup();
+  await createWorker().fetch(request(update(1, '/test_snow')), env);
+  calls.length = 0;
+  now += 31 * 60_000;
+  await session.alarm();
+  assert.equal(state.has('session'), false);
+  assert.equal(alarmAt(), state.get('snowPreview').expiresAt);
+  now += 30 * 60_000;
+  await session.alarm();
+  assert.equal(state.has('snowPreview'), false);
+  assert.equal(alarmAt(), undefined);
+  assert.equal(calls.length, 0);
+});

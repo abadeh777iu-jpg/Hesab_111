@@ -227,3 +227,48 @@ test('/weather now reports an actionable safe diagnosis instead of the same gene
   assert.ok(sent[0].text.includes('WX_HTTP_429'));
   assert.ok(!sent[0].text.includes('sensitive-provider-details'));
 });
+
+test('snow preview sends a clearly labeled simulation without touching live city or subscriptions', async () => {
+  const { state, sent, calls, assistant } = setup();
+  const live = { city: { name: 'custom city', latitude: 20, longitude: 30 }, alertsEnabled: false, nextCheckAt: null };
+  state.set('weather', live);
+  state.set('weatherOptOut', true);
+  state.set('followup', { disabled: true });
+  await assistant.previewSnow(42);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].chat, 42);
+  assert.ok(sent[0].text.startsWith('🧪 آزمایشی'));
+  assert.ok(sent[0].text.includes('این خبر واقعی برف نیست'));
+  assert.ok(sent[0].text.includes('آباده، استان فارس'));
+  assert.ok(sent[0].text.includes('ساختگی'));
+  assert.ok(!sent[0].text.includes('منبع: Open-Meteo'));
+  assert.equal(calls.length, 0); // no API key in this fixture; no model or weather calls
+  assert.deepEqual(state.get('weather'), live);
+  assert.equal(state.get('weatherOptOut'), true);
+  assert.deepEqual(state.get('followup'), { disabled: true });
+});
+
+test('snow preview generates a fresh sentence once per hour and expires only its own ticket', async t => {
+  let now = 1_800_000_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const { state, sent, env, assistant } = setup();
+  let generations = 0;
+  env.OPENROUTER_API_KEY = 'key'; env.OPENROUTER_MODEL = 'model';
+  env.fetchImpl = async url => {
+    assert.equal(new URL(url).hostname, 'openrouter.ai');
+    generations++;
+    return new Response(JSON.stringify({ choices: [{ message: { content: 'گاهی یه شروع تازه، آروم و بی‌صدا از راه می‌رسه ❄️🤍' } }] }));
+  };
+  await assistant.previewSnow(42);
+  await assistant.previewSnow(42);
+  assert.equal(generations, 1);
+  assert.ok(sent[0].text.includes('یه شروع تازه'));
+  assert.ok(sent[1].text.includes('ساعتی یک بار'));
+  now += 60 * 60_000;
+  await assistant.alarm();
+  assert.equal(state.has('snowPreview'), false);
+  assert.equal(sent.length, 2); // cleanup is silent, never sends a test on a timer
+  await assistant.previewSnow(42);
+  assert.equal(generations, 2);
+  assert.ok(sent.at(-1).text.startsWith('🧪 آزمایشی'));
+});

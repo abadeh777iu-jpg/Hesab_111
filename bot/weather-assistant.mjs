@@ -22,6 +22,19 @@ export class WeatherAssistant {
     this.send = send;
     this.reschedule = reschedule;
   }
+  async previewSnow(chat) {
+    const previous = await this.storage.get('snowPreview');
+    if (previous?.expiresAt > Date.now()) {
+      await this.send(chat, 'تست برف رو قبلاً فرستادم 🧪 برای جلوگیری از مصرف تکراری اعتبار، هر نفر ساعتی یک بار می‌تونه تست بگیره.');
+      return;
+    }
+    // Reserve before generation/delivery. No arbitrary recipient ID is accepted.
+    await this.storage.put('snowPreview', { expiresAt: Date.now() + 60 * 60_000 });
+    await this.reschedule();
+    const event = { kind: 'snow', severe: false, probability: 85, at: Date.now() + 60 * 60_000 };
+    const sentence = await generateWeatherSentence(this.env, event, await this.storage.get('session'));
+    await this.send(chat, weatherAlert(DEFAULT_CITY, event, DEFAULT_CITY.timezone, sentence, true));
+  }
   async save(record) {
     await this.storage.put('weather', record);
     await this.reschedule();
@@ -105,6 +118,8 @@ export class WeatherAssistant {
     return true;
   }
   async alarm() {
+    const preview = await this.storage.get('snowPreview');
+    if (preview?.expiresAt <= Date.now()) await this.storage.delete('snowPreview');
     const record = await this.storage.get('weather');
     if (!record) return;
     if (record.candidatesExpiresAt && record.candidatesExpiresAt <= Date.now()) {
