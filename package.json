@@ -9,7 +9,12 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "test": "playwright test",
-    "assets:video": "node scripts/download-video.mjs"
+    "assets:video": "node scripts/download-video.mjs",
+    "bot": "node --env-file=.env.bot bot/index.mjs",
+    "test:bot": "node --test bot/*.test.mjs",
+    "bot:cf:deploy": "wrangler deploy",
+    "bot:cf:check": "wrangler deploy --dry-run --outdir .wrangler/dry-run",
+    "bot:webhook": "node --env-file=.env.bot bot/set-webhook.mjs"
   },
   "dependencies": {
     "@fontsource-variable/dm-sans": "^5.3.0",
@@ -30,6 +35,7 @@
     "@vitejs/plugin-react": "5.1.1",
     "tailwindcss": "4.1.17",
     "typescript": "5.9.3",
-    "vite": "^7.3.6"
+    "vite": "^7.3.6",
+    "wrangler": "^4.156.0"
   }
 }

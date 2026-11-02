@@ -1,3 +1,17 @@
+# ربات هم‌صحبت تلگرام
+
+**اجرای بدون سرور دائمی روی Cloudflare Workers:** [راهنمای مرحله‌به‌مرحله](bot/CLOUDFLARE.md). این روش از Webhook و حافظهٔ خصوصی Durable Objects استفاده می‌کند.
+
+ربات فارسی با اتصال به OpenRouter اضافه شده است. راهنمای نصب، تنظیم کلیدهای خصوصی، محدودیت‌ها و حریم خصوصی: [bot/README.md](bot/README.md). وب‌سایت فعلی بدون تغییر باقی مانده است.
+
+```sh
+cp .env.bot.example .env.bot
+# مقادیر فایل را روی سرور خودتان تنظیم کنید
+npm run bot
+```
+
+---
+
 # Scalable
 
 A responsive, dark analytics landing page built with React 19, TypeScript, Vite,

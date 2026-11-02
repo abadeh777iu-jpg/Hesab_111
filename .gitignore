@@ -8,3 +8,14 @@ test-results/
 playwright-report/
 
 .tanstack/
+
+# Server-only secrets (never expose through VITE_* variables)
+.env
+.env.*
+!.env.example
+!.env.bot.example
+
+# Cloudflare local state and secrets
+.wrangler/
+.dev.vars
+.dev.vars.*
