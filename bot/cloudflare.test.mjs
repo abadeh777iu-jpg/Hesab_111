@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createWorker, ChatSession, FOLLOWUP_DELAY, FOLLOWUP_TEXT } from './cloudflare.mjs';
+import { createWorker, ChatSession, FOLLOWUP_DELAY, FOLLOWUP_TEXT, FOLLOWUP_NOTICE } from './cloudflare.mjs';
 import { START_GREETING } from './core.mjs';
 
 function update(id = 1, text = 'سلام', user = 42) {
@@ -69,7 +69,7 @@ test('verified private message gets a short greeting, reply, bounded stored hist
   assert.equal(completions.length, 1);
   assert.equal(completions[0].body.messages[1].content, 'سلام');
   const sent = calls.filter(c => c.url.includes('sendMessage'));
-  assert.equal(sent[0].body.text, START_GREETING);
+  assert.equal(sent[0].body.text, `${START_GREETING}\n\n${FOLLOWUP_NOTICE}`);
   assert.equal(state.get('session').messages.length, 2);
   assert.ok(alarmAt() > Date.now());
 });
@@ -100,7 +100,8 @@ test('/reset clears sensitive history and alarm removes expired sessions', async
   assert.deepEqual(state.get('session').messages, []);
   const record = state.get('session'); record.expiresAt = Date.now() - 1; state.set('session', record);
   await session.alarm();
-  assert.equal(state.size, 0);
+  assert.equal(state.has('session'), false);
+  assert.deepEqual(state.get('followup'), { disabled: true, noticeShown: true, dueAt: null });
 });
 
 test('provider failure produces generic error and retries do not charge again', async () => {
@@ -145,7 +146,7 @@ test('30 stored messages retain the most recent 15 turns', async t => {
   assert.equal(lastRequest.body.messages.length, 32); // system + 30 prior messages + new input
 });
 
-test('without opt-in, cleanup never sends a proactive message', async t => {
+test('automatic check-in follows the disclosure without requiring an opt-in command', async t => {
   let now = 1_800_000_000_000;
   t.mock.method(Date, 'now', () => now);
   const { env, state, calls, session, alarmAt } = setup();
@@ -153,8 +154,10 @@ test('without opt-in, cleanup never sends a proactive message', async t => {
   calls.length = 0;
   now += FOLLOWUP_DELAY + 1;
   await session.alarm();
-  assert.equal(calls.length, 0);
-  assert.equal(state.size, 0);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].body.text, FOLLOWUP_TEXT);
+  assert.equal(state.has('session'), false);
+  assert.equal(state.get('followup').dueAt, null);
   assert.equal(alarmAt(), undefined);
 });
 
@@ -210,15 +213,15 @@ test('new text rearms the timer, duplicate webhook does not, completed check-in 
   assert.equal(state.get('followup').dueAt, now + FOLLOWUP_DELAY);
 });
 
-test('/stop, /reset and /start cancel scheduled check-ins and delete consent metadata', async t => {
+test('/stop and /reset cancel scheduled check-ins and retain an opt-out without a chat ID', async t => {
   let now = 1_800_000_000_000;
   t.mock.method(Date, 'now', () => now);
-  for (const command of ['/stop', '/reset', '/start']) {
+  for (const command of ['/stop', '/reset']) {
     const { env, state, calls, session } = setup();
     const worker = createWorker();
     await worker.fetch(request(update(1, '/followup')), env);
     await worker.fetch(request(update(2, command)), env);
-    assert.equal(state.has('followup'), false);
+    assert.deepEqual(state.get('followup'), { disabled: true, noticeShown: true, dueAt: null });
     calls.length = 0;
     now += FOLLOWUP_DELAY + 1;
     await session.alarm();
@@ -226,7 +229,7 @@ test('/stop, /reset and /start cancel scheduled check-ins and delete consent met
   }
 });
 
-test('failed delivery or revoked user access removes follow-up metadata without retries', async t => {
+test('failed delivery or revoked access clears routing data and suppresses follow-ups without retries', async t => {
   let now = 1_800_000_000_000;
   t.mock.method(Date, 'now', () => now);
   for (const mode of ['blocked', 'revoked']) {
@@ -239,7 +242,7 @@ test('failed delivery or revoked user access removes follow-up metadata without 
     else env.fetchImpl = async () => { attempts++; return new Response('{}', { status: 403 }); };
     await session.alarm();
     await session.alarm();
-    assert.equal(state.has('followup'), false);
+    assert.deepEqual(state.get('followup'), { disabled: true, noticeShown: true, dueAt: null });
     assert.equal(attempts, mode === 'blocked' ? 1 : 0);
     assert.equal(calls.length, 0);
   }
@@ -259,12 +262,12 @@ test('Cloudflare opinion replies use escaped native Telegram blockquotes', async
   assert.ok(!reply.text.includes('[OPINION]'));
 });
 
-test('/start sends only one short greeting, with no AI call or privacy wall', async () => {
+test('first /start sends one greeting with a brief notice, no AI call or privacy wall', async () => {
   const { env, calls, state } = setup();
   await createWorker().fetch(request(update(1, '/start')), env);
   assert.equal(calls.length, 1);
   assert.ok(calls[0].url.endsWith('/sendMessage'));
-  assert.equal(calls[0].body.text, START_GREETING);
+  assert.equal(calls[0].body.text, `${START_GREETING}\n\n${FOLLOWUP_NOTICE}`);
   assert.deepEqual(state.get('session').messages, []);
 });
 
@@ -292,4 +295,68 @@ test('text after /start does not trigger another greeting or explanation', async
   const sent = calls.filter(call => call.url.includes('sendMessage'));
   assert.equal(sent.length, 1);
   assert.ok(!sent[0].body.text.includes('OpenRouter'));
+});
+
+test('notice is shown once and survives history expiry and object recreation', async t => {
+  let now = 1_800_000_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const { env, state, storage, calls, session } = setup();
+  const worker = createWorker();
+  await worker.fetch(request(update(1, '/start')), env);
+  assert.ok(calls[0].body.text.includes(FOLLOWUP_NOTICE));
+  now += 31 * 60_000;
+  await session.alarm();
+  assert.equal(state.has('session'), false);
+  const recreated = new ChatSession({ storage }, env);
+  calls.length = 0;
+  await recreated.fetch(request(update(2, '/start')));
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].body.text, START_GREETING);
+  assert.equal(state.get('followup').dueAt, now + FOLLOWUP_DELAY);
+});
+
+test('opt-out survives new texts, history expiry, recreation and /start until explicit re-enable', async t => {
+  let now = 1_800_000_000_000;
+  t.mock.method(Date, 'now', () => now);
+  for (const command of ['/stop', '/reset']) {
+    const { env, state, storage, calls, session } = setup();
+    const worker = createWorker();
+    await worker.fetch(request(update(1, '/start')), env);
+    await worker.fetch(request(update(2, command)), env);
+    now += 31 * 60_000;
+    await session.alarm();
+    const recreated = new ChatSession({ storage }, env);
+    await recreated.fetch(request(update(3, 'سلام دوباره')));
+    await recreated.fetch(request(update(4, '/start')));
+    assert.deepEqual(state.get('followup'), { disabled: true, noticeShown: true, dueAt: null });
+    calls.length = 0;
+    now += FOLLOWUP_DELAY;
+    await recreated.alarm();
+    assert.equal(calls.length, 0);
+    await recreated.fetch(request(update(5, '/followup')));
+    assert.equal(state.get('followup').disabled, false);
+    assert.equal(state.get('followup').dueAt, now + FOLLOWUP_DELAY);
+  }
+});
+
+test('an existing session is notified before automatic outreach is enabled', async () => {
+  const { env, state, calls } = setup();
+  state.set('session', { messages: [], seen: [], lastAt: 0, introduced: true, expiresAt: Date.now() + 60_000 });
+  await createWorker().fetch(request(update()), env);
+  assert.equal(calls[0].body.text, FOLLOWUP_NOTICE);
+  assert.equal(state.get('followup').noticeShown, true);
+});
+
+test('if first disclosure cannot be delivered, no automatic follow-up is armed', async t => {
+  let now = 1_800_000_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const { env, state, session } = setup();
+  let attempts = 0;
+  env.fetchImpl = async () => { attempts++; return new Response('{}', { status: 403 }); };
+  await createWorker().fetch(request(update(1, '/start')), env);
+  assert.equal(state.has('followup'), false);
+  const before = attempts;
+  now += FOLLOWUP_DELAY;
+  await session.alarm();
+  assert.equal(attempts, before);
 });
