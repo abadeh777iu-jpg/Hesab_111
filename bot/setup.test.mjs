@@ -82,3 +82,31 @@ test('provider errors and failed verification return no raw tokens or error bodi
     assert.ok(!text.includes('private error'));
   }
 });
+
+test('authenticated diagnostics name only missing settings, including whitespace-only values', async () => {
+  const { env, worker, calls } = setup();
+  const required = ['TELEGRAM_BOT_TOKEN', 'OPENROUTER_API_KEY', 'OPENROUTER_MODEL', 'TELEGRAM_ALLOWED_USER_IDS'];
+  for (const key of required) {
+    for (const value of [undefined, '', '   ']) {
+      const response = await worker.fetch(post(), { ...env, [key]: value });
+      assert.equal(response.status, 503);
+      const { message } = await response.json();
+      assert.ok(message.includes('رمز اتصال پذیرفته شد'));
+      for (const name of required) assert.equal(message.includes(name), name === key);
+      for (const privateValue of [secret, env.TELEGRAM_BOT_TOKEN, env.OPENROUTER_API_KEY]) assert.ok(!message.includes(privateValue));
+    }
+  }
+  const response = await worker.fetch(post(), { ...env, OPENROUTER_MODEL: '', TELEGRAM_ALLOWED_USER_IDS: '' });
+  const { message } = await response.json();
+  assert.ok(message.includes('OPENROUTER_MODEL\nTELEGRAM_ALLOWED_USER_IDS'));
+  assert.equal(calls.length, 0);
+});
+
+test('missing-setting diagnostics are not exposed before owner authentication', async () => {
+  const { env, worker } = setup();
+  const response = await worker.fetch(post({ 'X-Setup-Secret': 'incorrect' }), { ...env, TELEGRAM_BOT_TOKEN: '', OPENROUTER_API_KEY: '' });
+  assert.equal(response.status, 403);
+  const text = await response.text();
+  assert.ok(!text.includes('TELEGRAM_BOT_TOKEN'));
+  assert.ok(!text.includes('OPENROUTER_API_KEY'));
+});

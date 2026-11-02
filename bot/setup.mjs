@@ -40,8 +40,12 @@ form.addEventListener('submit',async event=>{event.preventDefault();button.disab
   const secret = env.TELEGRAM_WEBHOOK_SECRET;
   if (!secret || !/^[A-Za-z0-9_-]{32,256}$/.test(secret)) return result('رمز اتصال در تنظیمات Worker ثبت نشده یا قالب آن صحیح نیست.', 503);
   if (request.headers.get('X-Setup-Secret') !== secret) return result('رمز اتصال صحیح نیست. فقط TELEGRAM_WEBHOOK_SECRET را وارد کنید.', 403);
-  if (!env.TELEGRAM_BOT_TOKEN || !env.OPENROUTER_API_KEY || !env.OPENROUTER_MODEL?.trim() || !env.TELEGRAM_ALLOWED_USER_IDS?.trim()) {
-    return result('تنظیمات ناقص است. توکن تلگرام، کلید OpenRouter، مدل و کاربران مجاز را در تنظیمات Worker بررسی کنید.', 503);
+  // Only disclose missing setting names after owner authentication. Never send
+  // configured values (including tokens) to the browser, even on failure.
+  const required = ['TELEGRAM_BOT_TOKEN', 'OPENROUTER_API_KEY', 'OPENROUTER_MODEL', 'TELEGRAM_ALLOWED_USER_IDS'];
+  const missing = required.filter(name => typeof env[name] !== 'string' || !env[name].trim());
+  if (missing.length) {
+    return result(`رمز اتصال پذیرفته شد. این تنظیمات ثبت نشده‌اند یا خالی هستند:\n${missing.join('\n')}\nدر Cloudflare، بخش Settings → Variables and Secrets، فقط همین موارد را تکمیل و Save / Deploy کنید. مقدار کلیدها را در چت نفرستید.`, 503);
   }
   try {
     const fetchImpl = env.fetchImpl || fetch;
