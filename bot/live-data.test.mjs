@@ -127,3 +127,43 @@ test('city search validates and rounds coordinates without picking an ambiguous 
   assert.ok(isMarketQuestion('قیمت دلار چنده؟'));
   assert.equal(isMarketQuestion('درباره کارم حرف بزنیم'), false);
 });
+
+test('a real Open-Meteo shaped Abadeh response passes validation without weakening freshness', async t => {
+  const sample = {
+    timezone: 'Asia/Tehran', utc_offset_seconds: 12600,
+    current_units: { time: 'unixtime', temperature_2m: '°C', weather_code: 'wmo code' },
+    current: { time: 1793645100, interval: 900, temperature_2m: 12.9, weather_code: 2 },
+    hourly: { time: [1793644200, 1793647800, 1793651400], precipitation_probability: [0, 0, 0], rain: [0, 0, 0], snowfall: [0, 0, 0], weather_code: [2, 0, 0] },
+  };
+  t.mock.method(Date, 'now', () => sample.current.time * 1000 + 120000);
+  const data = await getWeather({ latitude: 31.16, longitude: 52.65 }, async () => new Response(JSON.stringify(sample)));
+  assert.equal(data.current.temperature_2m, 12.9);
+  assert.equal(data.timezone, 'Asia/Tehran');
+});
+
+test('safe weather diagnostics distinguish HTTP, network, timeout, invalid data and stale data', async () => {
+  const { weatherFailureMessage, LiveDataError } = await import('./live-data.mjs');
+  const city = { latitude: 31.16, longitude: 52.65 };
+  const stale = forecast(); stale.current.time -= 24 * 3600;
+  const cases = [
+    [async () => new Response('secret upstream body', { status: 429 }), 'HTTP_429'],
+    [async () => new Response('secret upstream body', { status: 403 }), 'HTTP_403'],
+    [async () => { throw new TypeError('secret-token-in-url'); }, 'NETWORK'],
+    [async () => { throw new DOMException('private URL', 'TimeoutError'); }, 'TIMEOUT'],
+    [async () => new Response('<html>private response</html>'), 'BAD_JSON'],
+    [async () => new Response('{}'), 'DATA'],
+    [async () => new Response(JSON.stringify(stale)), 'STALE'],
+  ];
+  for (const [fetchImpl, expected] of cases) {
+    await assert.rejects(getWeather(city, fetchImpl), error => {
+      assert.ok(error instanceof LiveDataError);
+      const message = weatherFailureMessage(error);
+      assert.ok(message.includes(`WX_${expected}`));
+      assert.ok(!message.includes('secret'));
+      assert.ok(!message.includes('private'));
+      return true;
+    });
+  }
+  assert.ok(weatherFailureMessage(new Error('token=secret')).includes('WX_INTERNAL'));
+  assert.ok(!weatherFailureMessage(new LiveDataError('secret')).includes('secret'));
+});

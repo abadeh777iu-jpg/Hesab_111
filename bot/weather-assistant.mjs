@@ -1,6 +1,6 @@
 import { OUTREACH_NOTICE } from './core.mjs';
 import { generateWeatherSentence } from './outreach-text.mjs';
-import { findCities, getWeather, upcomingPrecipitation, weatherSummary, weatherAlert, WEATHER_INTERVAL, isWeatherQuestion } from './live-data.mjs';
+import { findCities, getWeather, upcomingPrecipitation, weatherSummary, weatherAlert, WEATHER_INTERVAL, isWeatherQuestion, weatherFailureMessage } from './live-data.mjs';
 
 // Approximate centre of Abadeh, Fars; this is an owner-selected default,
 // not a claim about a recipient's actual location.
@@ -99,8 +99,8 @@ export class WeatherAssistant {
     try {
       const forecast = await getWeather(record.city, fetchImpl);
       await this.send(chat, weatherSummary(record.city, forecast));
-    } catch {
-      await this.send(chat, 'الان دادهٔ معتبر هوا ندارم؛ چیزی رو حدس نمی‌زنم 🌱 کمی بعد /weather رو امتحان کن.');
+    } catch (error) {
+      await this.send(chat, weatherFailureMessage(error));
     }
     return true;
   }

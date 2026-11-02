@@ -218,3 +218,12 @@ test('a failed AI sentence request cannot suppress a factual weather alert', asy
   assert.ok(!sent[0].text.includes('undefined'));
   assert.ok(!sent[0].text.includes('null'));
 });
+
+test('/weather now reports an actionable safe diagnosis instead of the same generic error', async () => {
+  const { env, assistant, sent } = setup();
+  env.fetchImpl = async () => new Response('sensitive-provider-details', { status: 429 });
+  await assistant.handle('/weather', 42);
+  assert.equal(sent.length, 1);
+  assert.ok(sent[0].text.includes('WX_HTTP_429'));
+  assert.ok(!sent[0].text.includes('sensitive-provider-details'));
+});

@@ -3,10 +3,41 @@ export const WEATHER_INTERVAL = 60 * 60_000;
 export const WEATHER_LOOKAHEAD = 3 * 60 * 60_000;
 const fa = new Intl.NumberFormat('fa-IR', { maximumFractionDigits: 0 });
 
+export class LiveDataError extends Error {
+  constructor(code) { super('Live data unavailable'); this.code = code; }
+}
+
 export async function getJson(url, fetchImpl = fetch) {
-  const response = await fetchImpl(url, { signal: AbortSignal.timeout(10_000), redirect: 'error' });
-  if (!response.ok) throw new Error('Live data unavailable');
-  return response.json();
+  let response;
+  try {
+    response = await fetchImpl(url, {
+      signal: AbortSignal.timeout(10_000), redirect: 'error', headers: { Accept: 'application/json' },
+    });
+  } catch (error) {
+    throw new LiveDataError(['TimeoutError', 'AbortError'].includes(error?.name) ? 'TIMEOUT' : 'NETWORK');
+  }
+  if (!response.ok) {
+    const status = Number.isInteger(response.status) && response.status >= 100 && response.status <= 599 ? response.status : 0;
+    throw new LiveDataError(`HTTP_${status}`);
+  }
+  try { return await response.json(); }
+  catch { throw new LiveDataError('BAD_JSON'); }
+}
+
+export function weatherFailureMessage(error) {
+  // Whitelist codes only; never echo raw exceptions, URLs, tokens or upstream bodies.
+  const safe = error instanceof LiveDataError && /^(?:HTTP_[1-5][0-9]{2}|NETWORK|TIMEOUT|BAD_JSON|DATA|STALE)$/.test(error.code)
+    ? error.code : 'INTERNAL';
+  let explanation;
+  if (safe === 'HTTP_429') explanation = 'سرویس هوا فعلاً درخواست‌ها رو محدود کرده؛ این خطا از کلید OpenRouter نیست.';
+  else if (safe === 'HTTP_401' || safe === 'HTTP_403') explanation = 'سرویس هوا دسترسی این درخواست رو رد کرده.';
+  else if (safe === 'TIMEOUT') explanation = 'پاسخ سرویس هوا به‌موقع نرسید.';
+  else if (safe === 'NETWORK') explanation = 'اتصال ربات به سرویس هوا برقرار نشد.';
+  else if (safe === 'STALE') explanation = 'زمان دادهٔ سرویس با زمان فعلی سازگار نیست؛ داده رو زنده نمایش نمی‌دم.';
+  else if (safe === 'DATA' || safe === 'BAD_JSON') explanation = 'پاسخ سرویس هوا ناقص یا نامعتبره.';
+  else if (safe.startsWith('HTTP_')) explanation = 'سرویس هوا درخواست رو با خطا پاسخ داده.';
+  else explanation = 'پردازش پاسخ هوا انجام نشد.';
+  return `${explanation} 🌱\nکد بررسی: WX_${safe}\nاین کد رو برای مدیر ربات بفرست؛ فعلاً کلیدها رو تغییر نده.`;
 }
 
 function coordinates(lat, lon) {
@@ -35,7 +66,7 @@ export function localTime(timestamp, timezone = 'UTC') {
   }).format(timestamp);
 }
 export async function getWeather(city, fetchImpl = fetch) {
-  if (!coordinates(city.latitude, city.longitude)) throw new Error('Invalid coordinates');
+  if (!coordinates(city.latitude, city.longitude)) throw new LiveDataError('DATA');
   const url = new URL(WEATHER_URL);
   url.search = new URLSearchParams({
     latitude: String(city.latitude), longitude: String(city.longitude),
@@ -44,9 +75,12 @@ export async function getWeather(city, fetchImpl = fetch) {
     forecast_days: '2', timezone: 'auto', timeformat: 'unixtime',
   });
   const data = await getJson(url.href, fetchImpl);
-  if (!Number.isFinite(data.current?.temperature_2m) || !Number.isFinite(data.current?.time) ||
-      Math.abs(Date.now() - data.current.time * 1000) > 3 * 60 * 60_000 || !Array.isArray(data.hourly?.time)) {
-    throw new Error('Incomplete or stale forecast');
+  if (!Number.isFinite(data?.current?.temperature_2m) || !Number.isFinite(data?.current?.time) ||
+      !Array.isArray(data?.hourly?.time) || data.hourly.time.length === 0) {
+    throw new LiveDataError('DATA');
+  }
+  if (Math.abs(Date.now() - data.current.time * 1000) > 3 * 60 * 60_000) {
+    throw new LiveDataError('STALE');
   }
   return { ...data, timezone: validTimezone(data.timezone || city.timezone) };
 }
