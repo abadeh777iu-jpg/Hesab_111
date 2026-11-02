@@ -158,7 +158,7 @@ test('automatic check-in follows the disclosure without requiring an opt-in comm
   assert.equal(calls[0].body.text, FOLLOWUP_TEXT);
   assert.equal(state.has('session'), false);
   assert.equal(state.get('followup').dueAt, null);
-  assert.equal(alarmAt(), undefined);
+  assert.equal(alarmAt(), state.get('weather').nextCheckAt);
 });
 
 test('opt-in survives history cleanup and object recreation; one check-in after 24h, no AI call', async t => {
@@ -413,4 +413,40 @@ test('chat activity and follow-up scheduling preserve the earlier weather alarm'
   assert.equal(state.get('weather').nextCheckAt, now + 3600000);
   assert.equal(state.get('followup').dueAt, now - 1000 + FOLLOWUP_DELAY);
   assert.ok(alarmAt() < state.get('weather').nextCheckAt); // 30-minute history cleanup still wins
+});
+
+test('first start automatically enrolls Abadeh weather after one combined notice', async () => {
+  const { env, state, calls } = setup();
+  await createWorker().fetch(request(update(1, '/start')), env);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].body.text, `${START_GREETING}\n\n${FOLLOWUP_NOTICE}`);
+  assert.ok(calls[0].body.text.includes('آباده'));
+  assert.equal(state.get('weather').city.name, 'آباده، استان فارس');
+  assert.equal(state.get('weather').alertsEnabled, true);
+});
+
+test('existing conversations receive a brief weather notice once, without a city question', async () => {
+  const { env, state, calls } = setup();
+  state.set('followup', { chatId: 42, dueAt: Date.now() + FOLLOWUP_DELAY, noticeShown: true });
+  const worker = createWorker();
+  await worker.fetch(request(update(1, '/start')), env);
+  assert.equal(calls.length, 2); // short hello + one new weather notice
+  assert.ok(calls[1].body.text.includes('آباده'));
+  assert.ok(!calls[1].body.text.includes('کدوم'));
+  calls.length = 0;
+  await worker.fetch(request(update(2, '/start')), env);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].body.text, START_GREETING);
+});
+
+test('automatic Abadeh alerts do not reactivate after /stop or /reset and a new /start', async () => {
+  for (const command of ['/stop', '/reset']) {
+    const { env, state } = setup();
+    const worker = createWorker();
+    await worker.fetch(request(update(1, '/start')), env);
+    await worker.fetch(request(update(2, command)), env);
+    await worker.fetch(request(update(3, '/start')), env);
+    assert.equal(state.get('weatherOptOut'), true);
+    assert.ok(!state.get('weather')?.alertsEnabled);
+  }
 });

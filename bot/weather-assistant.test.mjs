@@ -117,3 +117,61 @@ test('revoked access or blocked delivery disables weather outreach', async t => 
     assert.equal(sent.length, 0);
   }
 });
+
+test('default weather is Abadeh Fars without a city question or geocoding request', async () => {
+  const { sent, calls, state, assistant } = setup();
+  await assistant.handle('/weather', 42);
+  assert.equal(calls.length, 1);
+  const url = new URL(calls[0]);
+  assert.equal(url.hostname, 'api.open-meteo.com');
+  assert.equal(url.searchParams.get('latitude'), '31.16');
+  assert.equal(url.searchParams.get('longitude'), '52.65');
+  assert.ok(sent.at(-1).text.startsWith('آباده، استان فارس'));
+  assert.ok(!sent.at(-1).text.includes('اول شهرت'));
+  assert.equal(state.has('weather'), false); // a manual lookup isn't a location override
+});
+
+test('automatic default alerts require a delivered notice and do not repeat it', async () => {
+  const { state, sent, calls, assistant } = setup();
+  await assistant.ensureAutomatic(42);
+  assert.equal(sent.length, 1);
+  assert.ok(sent[0].text.includes('آباده'));
+  assert.ok(sent[0].text.includes('/stop'));
+  assert.equal(state.get('weather').city.name, 'آباده، استان فارس');
+  assert.equal(state.get('weather').alertsEnabled, true);
+  assert.equal(calls.length, 0); // no unnecessary geocoding/forecast on enrollment
+  await assistant.ensureAutomatic(42);
+  assert.equal(sent.length, 1);
+});
+
+test('default enrollment preserves weather opt-outs including forget before any saved city', async () => {
+  for (const command of ['/weatherstop', '/forgetcity']) {
+    const { state, sent, assistant } = setup();
+    await assistant.handle(command, 42);
+    assert.equal(state.get('weatherOptOut'), true);
+    sent.length = 0;
+    await assistant.ensureAutomatic(42, true);
+    assert.equal(state.has('weather'), false);
+    assert.equal(sent.length, 0);
+    await assistant.handle('/alerts', 42);
+    assert.equal(state.has('weatherOptOut'), false);
+    assert.equal(state.get('weather').city.name, 'آباده، استان فارس');
+    assert.equal(state.get('weather').alertsEnabled, true);
+  }
+});
+
+test('an explicit custom city and its disabled alert preference are never overwritten', async () => {
+  const { state, assistant } = setup();
+  await assistant.handle('/city تهران', 42);
+  await assistant.handle('/city 1', 42);
+  await assistant.ensureAutomatic(42, true);
+  assert.ok(state.get('weather').city.name.includes('تهران'));
+  assert.equal(state.get('weather').alertsEnabled, false);
+});
+
+test('failed automatic default disclosure does not enable alerts', async () => {
+  const { state, assistant } = setup();
+  assistant.send = async () => { throw new Error('delivery failed'); };
+  await assert.rejects(assistant.ensureAutomatic(42));
+  assert.equal(state.has('weather'), false);
+});

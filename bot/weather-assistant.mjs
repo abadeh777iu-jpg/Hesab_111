@@ -1,5 +1,12 @@
 import { findCities, getWeather, upcomingPrecipitation, weatherSummary, weatherAlert, WEATHER_INTERVAL, isWeatherQuestion } from './live-data.mjs';
 
+// Approximate centre of Abadeh, Fars; this is an owner-selected default,
+// not a claim about a recipient's actual location.
+export const DEFAULT_CITY = Object.freeze({
+  name: 'آباده، استان فارس', latitude: 31.16, longitude: 52.65, timezone: 'Asia/Tehran',
+});
+export const WEATHER_NOTICE = 'گاهی خبر هوای آباده، فارس رو می‌فرستم 🌦️ اگه نخواستی: /stop';
+
 const CANDIDATE_TTL = 10 * 60_000;
 export function nextWeatherWake(record) {
   const times = [record?.candidatesExpiresAt, record?.alertsEnabled ? record.nextCheckAt : null].filter(time => Number.isFinite(time) && time > 0);
@@ -17,7 +24,16 @@ export class WeatherAssistant {
     await this.storage.put('weather', record);
     await this.reschedule();
   }
+  async ensureAutomatic(chat, noticeAlreadyDelivered = false) {
+    // Preserve every explicit selection/opt-out, including choices made before
+    // automatic defaults were introduced. Never overwrite a custom city.
+    if (await this.storage.get('weatherOptOut') || await this.storage.get('weather')) return;
+    if (!noticeAlreadyDelivered) await this.send(chat, WEATHER_NOTICE);
+    await this.save({ city: { ...DEFAULT_CITY }, chatId: chat, alertsEnabled: true,
+      nextCheckAt: Date.now() + 1000, defaultCity: true });
+  }
   async stop(forget = false) {
+    await this.storage.put('weatherOptOut', true);
     const record = await this.storage.get('weather');
     if (forget) await this.storage.delete('weather');
     else if (record) await this.storage.put('weather', { ...record, alertsEnabled: false, nextCheckAt: null });
@@ -27,7 +43,7 @@ export class WeatherAssistant {
     const [raw, ...args] = text.trim().split(/\s+/);
     const command = raw.split('@')[0].toLowerCase();
     if (!['/city', '/weather', '/alerts', '/weatherstop', '/forgetcity'].includes(command) && !isWeatherQuestion(text)) return false;
-    const record = await this.storage.get('weather') || {};
+    let record = await this.storage.get('weather') || {};
     const fetchImpl = this.env.fetchImpl || fetch;
     if (command === '/forgetcity') {
       await this.stop(true);
@@ -42,7 +58,7 @@ export class WeatherAssistant {
     if (command === '/city') {
       const name = args.join(' ');
       if (!name) {
-        await this.send(chat, 'اسم شهرت رو بفرست، مثلاً /city تهران 🌍 نام شهر برای پیدا کردن هوا به Open-Meteo فرستاده می‌شه؛ آدرس دقیق لازم نیست.');
+        await this.send(chat, `شهر فعلی: ${(record.city || DEFAULT_CITY).name} 🌍\nاگر خواستی تغییرش بدی، مثلاً /city تهران رو بفرست. نام جستجو به Open-Meteo فرستاده می‌شه؛ آدرس دقیق لازم نیست.`);
         return true;
       }
       const normalized = name.replace(/[۰-۹]/g, c => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(c))).replace(/[٠-٩]/g, c => String('٠١٢٣٤٥٦٧٨٩'.indexOf(c)));
@@ -71,12 +87,10 @@ export class WeatherAssistant {
       }
       return true;
     }
-    if (!record.city) {
-      await this.send(chat, 'اول شهرت رو مشخص کن، مثلاً /city تهران 🌍 بعد یکی از نتیجه‌ها رو تأیید کن.');
-      return true;
-    }
+    if (!record.city) record = { ...record, city: { ...DEFAULT_CITY }, defaultCity: true };
     if (command === '/alerts') {
       await this.send(chat, 'هشدار باران و برف فعال شد 🌦️ هر ساعت بررسی می‌کنم؛ اگر شروع بارش در سه ساعت آینده محتمل باشه خبر می‌دم. پیش‌بینی قطعی نیست و خبر دادن قبل از هر بارش تضمین نمی‌شه. لغو: /weatherstop یا /stop');
+      await this.storage.delete('weatherOptOut');
       await this.save({ ...record, chatId: chat, alertsEnabled: true, nextCheckAt: Date.now() + 1000 });
       return true;
     }
@@ -107,6 +121,7 @@ export class WeatherAssistant {
     await this.storage.put('weather', record); // reschedule before upstream I/O
     const allowed = this.env.TELEGRAM_ALLOWED_USER_IDS?.trim() || '';
     if (allowed !== '*' && !allowed.split(',').map(s => s.trim()).includes(String(record.chatId))) {
+      await this.storage.put('weatherOptOut', true);
       record.alertsEnabled = false;
       record.nextCheckAt = null;
       await this.storage.put('weather', record);
@@ -123,6 +138,7 @@ export class WeatherAssistant {
     await this.storage.put('weather', record); // claim before sending; no duplicate alarms
     try { await this.send(record.chatId, weatherAlert(record.city, event, forecast.timezone)); }
     catch {
+      await this.storage.put('weatherOptOut', true);
       record.alertsEnabled = false;
       record.nextCheckAt = null;
       await this.storage.put('weather', record);

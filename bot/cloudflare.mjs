@@ -5,10 +5,10 @@ import { WeatherAssistant, nextWeatherWake } from './weather-assistant.mjs';
 import { isMarketQuestion, isWeatherQuestion } from './live-data.mjs';
 
 const TTL = 30 * 60_000;
-export const FOLLOWUP_NOTICE = 'گاهی میام یه احوالی ازت می‌پرسم 🌱 اگه نخواستی: /stop';
+export const FOLLOWUP_NOTICE = 'گاهی میام یه احوالی ازت می‌پرسم یا خبر هوای شهر پیش‌فرض (آباده، فارس) رو می‌دم 🌱 اگه نخواستی: /stop';
 export const FOLLOWUP_DELAY = 24 * 60 * 60_000;
 export const FOLLOWUP_TEXT = 'سلام رفیق، امروز چطوری؟ 🙂🌱\n\nلغو احوال‌پرسی: /stop';
-export const CLOUD_PRIVACY = 'پیام‌ها برای پاسخ به OpenRouter و ارائه‌دهندهٔ مدل ارسال می‌شن. حداکثر ۳۰ پیام اخیر در کلودفلر نگه داشته و بعد از ۳۰ دقیقه بی‌فعالیتی یا /reset از حافظهٔ فعال حذف می‌شن. احوال‌پرسی پس از اطلاع کوتاه در گفتگو خودکار فعاله؛ حدود ۲۴ ساعت بعد از آخرین پیام، یک پیام عمومی می‌فرستیم، نه پیام تکراری روزانه. لغو: /stop — فعال‌سازی دوباره: /followup. شناسهٔ چت و زمان ارسال جدا از متن گفتگو ذخیره می‌شن؛ با لغو، این دو حذف و فقط ترجیح خاموشی نگه داشته می‌شه تا با پیام جدید یا /start دوباره فعال نشه. /reset هم پیگیری رو خاموش می‌کنه. پیام‌های تلگرام، داده‌های سرویس مدل و نسخه‌های پشتیبان تابع سیاست همون سرویس‌ها هستن. شهر انتخابی و مختصات تقریبی آن جداگانه برای هوا نگه داشته و به Open-Meteo ارسال می‌شه؛ حذف شهر و هشدارها: /forgetcity یا /reset. /stop همهٔ پیام‌های خودکار رو خاموش می‌کنه. لطفاً اطلاعات حساس نفرست.';
+export const CLOUD_PRIVACY = 'پیام‌ها برای پاسخ به OpenRouter و ارائه‌دهندهٔ مدل ارسال می‌شن. حداکثر ۳۰ پیام اخیر در کلودفلر نگه داشته و بعد از ۳۰ دقیقه بی‌فعالیتی یا /reset از حافظهٔ فعال حذف می‌شن. احوال‌پرسی پس از اطلاع کوتاه در گفتگو خودکار فعاله؛ حدود ۲۴ ساعت بعد از آخرین پیام، یک پیام عمومی می‌فرستیم، نه پیام تکراری روزانه. لغو: /stop — فعال‌سازی دوباره: /followup. شناسهٔ چت و زمان ارسال جدا از متن گفتگو ذخیره می‌شن؛ با لغو، این دو حذف و فقط ترجیح خاموشی نگه داشته می‌شه تا با پیام جدید یا /start دوباره فعال نشه. /reset هم پیگیری رو خاموش می‌کنه. پیام‌های تلگرام، داده‌های سرویس مدل و نسخه‌های پشتیبان تابع سیاست همون سرویس‌ها هستن. شهر پیش‌فرض آباده، فارس است، نه لزوماً محل زندگی تو. خبر هوا هم بعد از اطلاع کوتاه خودکار فعاله. شهر دلخواه و مختصات تقریبی آن جداگانه برای هوا نگه داشته و به Open-Meteo ارسال می‌شه؛ حذف شهر و هشدارها: /forgetcity یا /reset. ترجیح خاموشی هوا هم جدا نگه داشته می‌شه تا با پیام جدید دوباره فعال نشه. /stop همهٔ پیام‌های خودکار رو خاموش می‌کنه. لطفاً اطلاعات حساس نفرست.';
 const ABOUT = `${PERSONA_GREETING}\n\n${CLOUD_PRIVACY}\n\nلغو احوال‌پرسی: /stop — فعال‌سازی دوباره: /followup\n\nاین روزها مشغول چه کاری هستی و کجاش گیر کردی؟`;
 const FAILURE = 'الان نتونستم پاسخ رو آماده یا ارسال کنم. لطفاً کمی بعد دوباره پیام بده. اگر در خطر فوری هستی، منتظر ربات نمون و با خدمات اضطراری محل یا یک فرد مطمئن تماس بگیر.';
 const ok = () => new Response('OK');
@@ -132,7 +132,10 @@ export class ChatSession {
     const preference = await this.ctx.storage.get('followup');
     const needsNotice = !preference?.disabled && !preference?.noticeShown;
     await this.send(chat, needsNotice ? `${START_GREETING}\n\n${FOLLOWUP_NOTICE}` : START_GREETING);
-    if (!preference?.disabled) await this.armFollowup(chat, record);
+    if (!preference?.disabled) {
+      await this.armFollowup(chat, record);
+      await this.weather.ensureAutomatic(chat, needsNotice);
+    }
   }
   async ensureAutomaticFollowup(chat, record) {
     const preference = await this.ctx.storage.get('followup');
@@ -141,6 +144,7 @@ export class ChatSession {
     // opt-in subscriptions remain valid, but are informed on their next chat.
     if (!preference?.noticeShown) await this.send(chat, FOLLOWUP_NOTICE);
     await this.armFollowup(chat, record);
+    await this.weather.ensureAutomatic(chat, !preference?.noticeShown);
   }
   async telegram(method, body) {
     const fetchImpl = this.env.fetchImpl || fetch;
