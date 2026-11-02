@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createWorker, ChatSession } from './cloudflare.mjs';
+import { createWorker, ChatSession, FOLLOWUP_DELAY, FOLLOWUP_TEXT } from './cloudflare.mjs';
 
 function update(id = 1, text = 'سلام', user = 42) {
   return { update_id: id, message: { chat: { id: user, type: 'private' }, from: { id: user }, text } };
@@ -12,6 +12,8 @@ function setup() {
     get: async key => structuredClone(state.get(key)),
     put: async (key, value) => state.set(key, structuredClone(value)),
     setAlarm: async at => { alarmAt = at; },
+    delete: async key => state.delete(key),
+    deleteAlarm: async () => { alarmAt = undefined; },
     deleteAll: async () => state.clear(),
   };
   const calls = [];
@@ -126,4 +128,135 @@ test('commands and non-text input do not call model', async () => {
     await worker.fetch(request(update(index, text)), env);
   }
   assert.equal(calls.filter(c => c.url.includes('openrouter.ai')).length, 0);
+});
+
+test('30 stored messages retain the most recent 15 turns', async t => {
+  let now = 1_800_000_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const { env, state, calls } = setup();
+  const worker = createWorker();
+  for (let id = 1; id <= 17; id++) {
+    await worker.fetch(request(update(id, `message-${id}`)), env);
+    now += 5000;
+  }
+  const messages = state.get('session').messages;
+  assert.equal(messages.length, 30);
+  assert.equal(messages[0].content, 'message-3');
+  assert.equal(messages.at(-2).content, 'message-17');
+  const lastRequest = calls.filter(call => call.url.includes('openrouter.ai')).at(-1);
+  assert.equal(lastRequest.body.messages.length, 32); // system + 30 prior messages + new input
+});
+
+test('without opt-in, cleanup never sends a proactive message', async t => {
+  let now = 1_800_000_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const { env, state, calls, session, alarmAt } = setup();
+  await createWorker().fetch(request(update()), env);
+  calls.length = 0;
+  now += FOLLOWUP_DELAY + 1;
+  await session.alarm();
+  assert.equal(calls.length, 0);
+  assert.equal(state.size, 0);
+  assert.equal(alarmAt(), undefined);
+});
+
+test('opt-in survives history cleanup and object recreation; one check-in after 24h, no AI call', async t => {
+  let now = 1_800_000_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const { env, state, storage, calls, session, alarmAt } = setup();
+  await createWorker().fetch(request(update(1, '/followup')), env);
+  const dueAt = now + FOLLOWUP_DELAY;
+  assert.equal(state.get('followup').dueAt, dueAt);
+  assert.equal(state.get('followup').chatId, 42);
+  calls.length = 0;
+  now += 31 * 60_000;
+  await session.alarm();
+  assert.equal(state.has('session'), false);
+  assert.equal(state.has('followup'), true);
+  assert.equal(alarmAt(), dueAt);
+  assert.equal(calls.length, 0);
+  const recreated = new ChatSession({ storage }, env);
+  now = dueAt - 1;
+  await recreated.alarm();
+  assert.equal(calls.length, 0);
+  now = dueAt;
+  await recreated.alarm();
+  await recreated.alarm();
+  now += FOLLOWUP_DELAY;
+  await recreated.alarm();
+  assert.equal(calls.length, 1);
+  assert.ok(calls[0].url.endsWith('/sendMessage'));
+  assert.equal(calls[0].body.text, FOLLOWUP_TEXT);
+  assert.equal(state.get('followup').dueAt, null);
+  assert.equal(alarmAt(), undefined);
+});
+
+test('new text rearms the timer, duplicate webhook does not, completed check-in can rearm', async t => {
+  let now = 1_800_000_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const { env, state, session } = setup();
+  const worker = createWorker();
+  await worker.fetch(request(update(1, '/followup')), env);
+  now += 60_000;
+  await worker.fetch(request(update(2, 'دارم درس می‌خونم')), env);
+  const dueAt = now + FOLLOWUP_DELAY;
+  assert.equal(state.get('followup').dueAt, dueAt);
+  now += 60_000;
+  await worker.fetch(request(update(2, 'دارم درس می‌خونم')), env);
+  assert.equal(state.get('followup').dueAt, dueAt);
+  now = dueAt;
+  await session.alarm();
+  assert.equal(state.get('followup').dueAt, null);
+  now += 5000;
+  await worker.fetch(request(update(3, 'سلام دوباره')), env);
+  assert.equal(state.get('followup').dueAt, now + FOLLOWUP_DELAY);
+});
+
+test('/stop, /reset and /start cancel scheduled check-ins and delete consent metadata', async t => {
+  let now = 1_800_000_000_000;
+  t.mock.method(Date, 'now', () => now);
+  for (const command of ['/stop', '/reset', '/start']) {
+    const { env, state, calls, session } = setup();
+    const worker = createWorker();
+    await worker.fetch(request(update(1, '/followup')), env);
+    await worker.fetch(request(update(2, command)), env);
+    assert.equal(state.has('followup'), false);
+    calls.length = 0;
+    now += FOLLOWUP_DELAY + 1;
+    await session.alarm();
+    assert.equal(calls.length, 0);
+  }
+});
+
+test('failed delivery or revoked user access removes follow-up metadata without retries', async t => {
+  let now = 1_800_000_000_000;
+  t.mock.method(Date, 'now', () => now);
+  for (const mode of ['blocked', 'revoked']) {
+    const { env, state, calls, session } = setup();
+    await createWorker().fetch(request(update(1, '/followup')), env);
+    calls.length = 0;
+    now += FOLLOWUP_DELAY;
+    let attempts = 0;
+    if (mode === 'revoked') env.TELEGRAM_ALLOWED_USER_IDS = '99';
+    else env.fetchImpl = async () => { attempts++; return new Response('{}', { status: 403 }); };
+    await session.alarm();
+    await session.alarm();
+    assert.equal(state.has('followup'), false);
+    assert.equal(attempts, mode === 'blocked' ? 1 : 0);
+    assert.equal(calls.length, 0);
+  }
+});
+
+test('Cloudflare opinion replies use escaped native Telegram blockquotes', async () => {
+  const { env, calls } = setup();
+  const original = env.fetchImpl;
+  env.fetchImpl = async (url, options) => url.includes('openrouter.ai')
+    ? new Response(JSON.stringify({ choices: [{ message: { content: 'می‌فهمم 🌱\n[OPINION]به نظرم <قدم اول> رو بردار 💪[/OPINION]' } }] }))
+    : original(url, options);
+  await createWorker().fetch(request(update()), env);
+  const reply = calls.at(-1).body;
+  assert.equal(reply.parse_mode, 'HTML');
+  assert.ok(reply.text.includes('<blockquote>'));
+  assert.ok(reply.text.includes('&lt;قدم اول&gt;'));
+  assert.ok(!reply.text.includes('[OPINION]'));
 });

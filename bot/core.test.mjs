@@ -48,7 +48,7 @@ test('OpenRouter request stays server-side and includes system and history', asy
       assert.equal(body.model, 'provider/model');
       assert.equal(body.messages[0].role, 'system');
       assert.deepEqual(body.messages.slice(1), messages);
-      assert.equal(body.max_tokens, 700);
+      assert.equal(body.max_tokens, 320);
       return { ok: true, json: async () => ({ choices: [{ message: { content: ' سلام 🌱 ' } }] }) };
     },
   });
@@ -88,4 +88,16 @@ test('work coaching emphasizes actionable hope without shaming or overriding cri
   assert.ok(prompt.includes('تنبلی ننام'));
   assert.ok(prompt.includes('ایمنی از بهره‌وری و انگیزه مهم‌تر است'));
   assert.ok(prompt.includes('خدمات اضطراری'));
+});
+
+test('default memory is 30 messages and prompt asks for short emoji-rich replies', () => {
+  const store = new ConversationStore();
+  store.save('user', Array.from({ length: 40 }, (_, index) => index));
+  assert.equal(store.get('user').length, 30);
+  assert.equal(store.get('user')[0], 10);
+  const prompt = systemPrompt();
+  assert.ok(prompt.includes('۱ تا ۳ جمله'));
+  assert.ok(prompt.includes('۲ تا ۴ ایموجی'));
+  assert.ok(prompt.includes('[OPINION]'));
+  assert.ok(prompt.includes('همه‌چیز را توضیح نده'));
 });

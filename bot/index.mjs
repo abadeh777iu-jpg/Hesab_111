@@ -1,4 +1,5 @@
 import { complete, ConversationStore, DISCLOSURE, PRIVACY, splitMessage } from './core.mjs';
+import { formatReply } from './format.mjs';
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
 const apiKey = process.env.OPENROUTER_API_KEY;
@@ -51,7 +52,7 @@ async function handle(message) {
   if (!message?.from || message.from.is_bot || message.chat?.type !== 'private') return;
   const id = String(message.from.id);
   const chat = message.chat.id;
-  if (allowedUsers.size && !allowedUsers.has(id)) {
+  if (allowedUsers.size && !allowedUsers.has('*') && !allowedUsers.has(id)) {
     await send(chat, 'این ربات فعلاً فقط برای کاربران مجاز فعاله.');
     return;
   }
@@ -66,6 +67,10 @@ async function handle(message) {
     store.clear(id);
     cooldowns.delete(id);
     await send(chat, 'سابقهٔ موقت گفتگومون پاک شد 🌱 دوست داری از کجا شروع کنیم؟');
+    return;
+  }
+  if (command === '/followup' || command === '/stop') {
+    await send(chat, 'احوال‌پرسی زمان‌بندی‌شده فقط در نسخهٔ Cloudflare فعاله؛ نسخهٔ محلی پیگیری خودکار نداره.');
     return;
   }
   if (command === '/privacy') { await send(chat, PRIVACY); return; }
@@ -86,7 +91,9 @@ async function handle(message) {
   await telegram('sendChatAction', { chat_id: chat, action: 'typing' }).catch(() => {});
   try {
     const answer = await complete({ apiKey, model, messages: history, style: process.env.BOT_STYLE });
-    await send(chat, answer);
+    const payloads = formatReply(answer);
+    if (!payloads.length) throw new Error('Empty formatted reply');
+    for (const payload of payloads) await telegram('sendMessage', { chat_id: chat, ...payload });
     store.save(id, [...history, { role: 'assistant', content: answer }]);
   } catch {
     console.error('AI reply or delivery failed; private details omitted.');
