@@ -1,19 +1,26 @@
+import { wavToMp3 } from './audio.mjs';
+
 // Fixed API upstreams only. Free.ai assets use a restricted static-output allowlist,
 // are downloaded without credentials, validated, and uploaded as bytes to Telegram.
 export const GLOBAL_MEDIA_LIMITS = Object.freeze({ image: 10, voice: 10 });
 export const PERSONAL_MEDIA_LIMITS = Object.freeze({ image: 5, voice: 3 });
 export const DEFAULT_IMAGE_MODEL = 'bytedance-seed/seedream-4.5';
 export const DEFAULT_SPEECH_MODEL = 'openai/gpt-4o-mini-tts-2025-12-15';
+export const DEFAULT_FREEAI_SPEECH_MODEL = 'piper';
+// Standard Persian Piper voice ID, not a clone of the bot owner. Free.ai account
+// availability still needs a live user test; overrides remain supported.
+export const DEFAULT_FREEAI_VOICE = 'fa_IR-amir-medium';
 const MAX_FILE = 5 * 1024 * 1024;
 export class MediaError extends Error {
   constructor(code) { super('Media request failed'); this.code = code; }
 }
 export function mediaFailureMessage(error) {
   if (error?.code === 'FREEAI_KEY') return 'ساخت عکس و ویس هنوز وصل نشده 🌱 مدیر باید FREEAI_API_KEY رو در Secrets کلودفلر ثبت کنه؛ کلید رو در چت نفرست.';
-  if (error?.code === 'FREEAI_VOICE') return 'صدای فارسی Free.ai هنوز تنظیم و تأیید نشده 🌱 مدیر باید نام مدل و صدای فارسی رو در FREEAI_TTS_MODEL و FREEAI_TTS_VOICE ثبت کنه. فعلاً برای ویس اعتباری مصرف نشد.';
+  if (error?.code === 'FREEAI_VOICE') return 'برای مدل صوتی انتخاب‌شده باید صدای سازگار هم مشخص بشه 🌱 مدیر FREEAI_TTS_VOICE رو بررسی کنه. فعلاً برای ویس اعتباری مصرف نشد.';
   if (error?.code === 'ASSET_URL') return 'سرویس رسانه آدرس فایل خارج از مسیر مجاز برگردوند؛ برای امنیت فایل رو دریافت نکردم 🌱 تکرار خودکار انجام نمی‌شه.';
-  if (error?.code === 'AUDIO_FORMAT') return 'سرویس فایل صوتی سازگار با ویس تلگرام نداد 🌱 خروجی باید MP3، OGG/Opus یا M4A باشه. پاسخ متنی باقی مونده؛ تکرار خودکار نمی‌کنم.';
+  if (error?.code === 'AUDIO_FORMAT') return 'سرویس فایل صوتی سازگار با ویس تلگرام نداد 🌱 خروجی صوتی یا WAV قابل‌تبدیل معتبر نبود. پاسخ متنی باقی مونده؛ تکرار خودکار نمی‌کنم.';
   if (error?.code === 'HTTP_401' || error?.code === 'HTTP_403') return 'کلید یا دسترسی سرویس رسانه پذیرفته نشد 🌱 مدیر باید تنظیمات همون سرویس رو بررسی کنه؛ کلید رو در چت نفرست.';
+  if (error?.code === 'HTTP_400' || error?.code === 'HTTP_422') return 'سرویس رسانه تنظیم مدل یا صدای درخواستی رو نپذیرفت 🌱 نام مدل و صدا باید در حساب Free.ai قابل‌استفاده باشه. کد امن: MEDIA_' + error.code;
   if (error?.code === 'HTTP_402') return 'اعتبار سرویس برای ساخت عکس یا ویس کافی نیست؛ مدیر ربات باید اعتبار سرویس رسانه رو بررسی کنه 🌱';
   if (error?.code === 'HTTP_429') return 'سرویس ساخت عکس یا ویس فعلاً شلوغه؛ کمی بعد دوباره امتحان کن 🌱';
   return 'نتونستم عکس یا ویس رو بسازم یا تحویل بدم 🌱 ممکنه مدل، محدودیت محتوا یا اتصال سرویس علتش باشه. تکرار خودکار نمی‌کنم تا دوباره اعتبار مصرف نشه.';
@@ -116,12 +123,18 @@ async function generateOpenRouterSpeech(env, answer) {
 }
 // Selection is explicit; missing Free.ai configuration never charges OpenRouter.
 export function mediaProvider(env) { return env.MEDIA_PROVIDER || 'freeai'; }
+export function freeAISpeechConfiguration(env) {
+  const model = env.FREEAI_TTS_MODEL?.trim() || DEFAULT_FREEAI_SPEECH_MODEL;
+  const voice = env.FREEAI_TTS_VOICE?.trim() || (model === DEFAULT_FREEAI_SPEECH_MODEL ? DEFAULT_FREEAI_VOICE : null);
+  if (!voice) throw new MediaError('FREEAI_VOICE');
+  return { model, voice };
+}
 export function validateMediaConfiguration(env, kind) {
   const provider = mediaProvider(env);
   if (provider === 'freeai') {
     if (!env.FREEAI_API_KEY?.trim()) throw new MediaError('FREEAI_KEY');
-    // Do not silently synthesize Persian with the English Kokoro SDK defaults.
-    if (kind === 'voice' && (!env.FREEAI_TTS_MODEL?.trim() || !env.FREEAI_TTS_VOICE?.trim())) throw new MediaError('FREEAI_VOICE');
+    // A non-default model must supply its own compatible voice.
+    if (kind === 'voice') freeAISpeechConfiguration(env);
   } else if (provider !== 'openrouter' || !env.OPENROUTER_API_KEY) {
     throw new MediaError('CONFIG');
   }
@@ -156,11 +169,11 @@ async function downloadFreeAIAsset(env, value, kind) {
   const response = await (env.fetchImpl || fetch)(url, {
     method: 'GET', redirect: 'manual', signal: AbortSignal.timeout(20_000),
     // Never forward a Free.ai/OpenRouter/Telegram key, cookies or arbitrary headers.
-    headers: { Accept: kind === 'image' ? 'image/png,image/jpeg' : 'audio/mpeg,audio/ogg,audio/mp4' },
+    headers: { Accept: kind === 'image' ? 'image/png,image/jpeg' : 'audio/mpeg,audio/ogg,audio/mp4,audio/wav,audio/x-wav' },
   });
   if (!response.ok) { await response.body?.cancel(); throw new MediaError(`HTTP_${response.status}`); }
   const type = response.headers.get('Content-Type')?.split(';')[0].trim().toLowerCase();
-  const permitted = kind === 'image' ? ['image/png', 'image/jpeg'] : ['audio/mpeg', 'audio/ogg', 'application/ogg', 'audio/mp4', 'audio/x-m4a'];
+  const permitted = kind === 'image' ? ['image/png', 'image/jpeg'] : ['audio/mpeg', 'audio/ogg', 'application/ogg', 'audio/mp4', 'audio/x-m4a', 'audio/wav', 'audio/x-wav', 'audio/wave', 'audio/vnd.wave'];
   if (!permitted.includes(type)) { await response.body?.cancel(); throw new MediaError(kind === 'voice' ? 'AUDIO_FORMAT' : 'DATA'); }
   const bytes = await readBounded(response, MAX_FILE);
   if (kind === 'image') {
@@ -168,6 +181,10 @@ async function downloadFreeAIAsset(env, value, kind) {
     const jpeg = bytes.length >= 3 && bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255;
     if ((type === 'image/png' && !png) || (type === 'image/jpeg' && !jpeg)) throw new MediaError('DATA');
     return { bytes, type, filename: png ? 'amir-image.png' : 'amir-image.jpg' };
+  }
+  if (['audio/wav', 'audio/x-wav', 'audio/wave', 'audio/vnd.wave'].includes(type)) {
+    try { return { bytes: wavToMp3(bytes), type: 'audio/mpeg', filename: 'amir-voice.mp3' }; }
+    catch { throw new MediaError('AUDIO_FORMAT'); }
   }
   const ascii = (start, length) => new TextDecoder().decode(bytes.subarray(start, start + length));
   const mp3 = type === 'audio/mpeg' && (ascii(0, 3) === 'ID3' || (bytes.length >= 2 && bytes[0] === 255 && (bytes[1] & 224) === 224));
@@ -190,8 +207,9 @@ export async function generateSpeech(env, answer) {
   if (mediaProvider(env) === 'openrouter') return generateOpenRouterSpeech(env, answer);
   const text = speechText(answer);
   if (!text) throw new MediaError('DATA');
+  const { model, voice } = freeAISpeechConfiguration(env);
   const data = await freeAIJson(env, 'tts', {
-    text, model: env.FREEAI_TTS_MODEL.trim(), voice: env.FREEAI_TTS_VOICE.trim(),
+    text, model, voice,
     language: 'fa', format: 'mp3',
   }, 60_000);
   return downloadFreeAIAsset(env, data.audio_url || data.url, 'voice');

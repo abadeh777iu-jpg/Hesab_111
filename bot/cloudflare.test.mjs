@@ -685,15 +685,15 @@ test('Free.ai default isolates image/speech from OpenRouter chat and still uses 
   assert.equal(state.has('followup'), false);
 });
 
-test('missing Free.ai key or Persian voice setup never reserves budget or falls back to OpenRouter', async () => {
-  for (const missing of ['FREEAI_API_KEY', 'FREEAI_TTS_MODEL', 'FREEAI_TTS_VOICE']) {
+test('missing Free.ai key or voice for a custom model never reserves budget or falls back to OpenRouter', async () => {
+  for (const missing of ['FREEAI_API_KEY', 'FREEAI_TTS_VOICE']) {
     const { env, calls, state, budgetState } = freeAIMediaSetup();
     delete env[missing];
     await createWorker().fetch(request(update(1, missing === 'FREEAI_API_KEY' ? '/image snow' : '/voice سلام')), env);
     assert.equal(calls.filter(call => call.url.includes('openrouter') || call.url.includes('api.free.ai')).length, 0);
     assert.equal(state.has('mediaUsage'), false);
     assert.equal(budgetState.size, 0);
-    assert.ok(calls.at(-1).body.text.includes(missing === 'FREEAI_API_KEY' ? 'FREEAI_API_KEY' : 'صدای فارسی'));
+    assert.ok(calls.at(-1).body.text.includes(missing === 'FREEAI_API_KEY' ? 'FREEAI_API_KEY' : 'FREEAI_TTS_VOICE'));
   }
 });
 
@@ -757,4 +757,20 @@ test('Free.ai permits five images per person, ten in total, and refreshes both q
   assert.equal(first.calls.filter(call => call.url.endsWith('/v1/image/generate/')).length, 6);
   assert.equal(first.state.get('mediaUsage').image, 1);
   assert.equal(first.budgetState.get('budget').image, 1);
+});
+
+
+test('voice works with just the Free.ai key using default Persian configuration, without surprise enrollment', async () => {
+  const { env, calls, state } = freeAIMediaSetup();
+  delete env.FREEAI_TTS_MODEL;
+  delete env.FREEAI_TTS_VOICE;
+  await createWorker().fetch(request(update(1, '/voice سلام کن')), env);
+  const speech = calls.find(call => call.url.endsWith('/v1/tts/'));
+  assert.equal(speech.body.model, 'piper');
+  assert.equal(speech.body.voice, 'fa_IR-amir-medium');
+  assert.equal(speech.body.language, 'fa');
+  assert.equal(calls.filter(call => call.url.endsWith('/sendVoice')).length, 1);
+  assert.equal(state.get('mediaUsage').voice, 1);
+  assert.equal(state.has('followup'), false);
+  assert.equal(state.has('weather'), false);
 });

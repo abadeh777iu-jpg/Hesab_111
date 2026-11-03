@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { makeWav } from './fixtures/audio.mjs';
 import {
   parseMediaRequest, generateImage, generateSpeech, uploadMedia, speechText,
   MediaBudgetHandler, mediaFailureMessage, nextMediaDay,
@@ -148,11 +149,11 @@ test('global budget recovers after object recreation, resets at UTC day boundary
   assert.equal(data.has('budget'), false);
 });
 
-test('Free.ai is the default media provider; keys and verified voice configuration are required before calls', async () => {
+test('Free.ai requires its own key and a compatible explicit voice when overriding the default model', async () => {
   let calls = 0;
   const env = { OPENROUTER_API_KEY: 'keep-chat-key', fetchImpl: async () => { calls++; throw new Error('Should not call'); } };
   await assert.rejects(generateImage(env, 'snow'), { code: 'FREEAI_KEY' });
-  await assert.rejects(generateSpeech({ ...env, FREEAI_API_KEY: 'free-key' }, 'سلام'), { code: 'FREEAI_VOICE' });
+  await assert.rejects(generateSpeech({ ...env, FREEAI_API_KEY: 'free-key', FREEAI_TTS_MODEL: 'custom-model' }, 'سلام'), { code: 'FREEAI_VOICE' });
   assert.equal(calls, 0); // never falls back to the chat key or an English voice
 });
 
@@ -235,7 +236,7 @@ test('Free.ai asset downloads have a byte cap and reject mismatched image signat
   }
 });
 
-test('Free.ai cannot substitute WAV or non-Opus OGG for a Telegram voice note', async () => {
+test('Free.ai rejects malformed WAV or non-Opus OGG instead of relabeling files', async () => {
   for (const [type, bytes] of [
     ['audio/wav', new TextEncoder().encode('RIFF WAV')],
     ['audio/ogg', new TextEncoder().encode('OggS vorbis data')],
@@ -260,4 +261,28 @@ test('Free.ai accepts supported Opus and M4A voice containers without a conversi
     assert.equal(file.type, expected);
     assert.equal(calls, 2);
   }
+});
+
+
+test('Free.ai voice defaults to Persian Piper and converts returned WAV locally with no paid conversion call', async () => {
+  let calls = 0;
+  const file = await generateSpeech({ FREEAI_API_KEY: 'free-key', fetchImpl: async (url, options) => {
+    calls++;
+    if (options.method === 'POST') {
+      assert.equal(url, 'https://api.free.ai/v1/tts/');
+      assert.deepEqual(JSON.parse(options.body), {
+        text: 'سلام رفیق', model: 'piper', voice: 'fa_IR-amir-medium', language: 'fa', format: 'mp3',
+      });
+      return Response.json({ audio_url: '/static/outputs/voice.wav' });
+    }
+    assert.equal(url, 'https://api.free.ai/static/outputs/voice.wav');
+    assert.equal(options.headers.Authorization, undefined);
+    return new Response(makeWav(), { headers: { 'Content-Type': 'audio/wav' } });
+  } }, 'سلام رفیق');
+  assert.equal(calls, 2);
+  assert.equal(file.type, 'audio/mpeg');
+  assert.equal(file.filename, 'amir-voice.mp3');
+  assert.ok(file.bytes.length > 100);
+  assert.equal(file.bytes[0], 255);
+  assert.equal(file.bytes[1] & 224, 224);
 });
