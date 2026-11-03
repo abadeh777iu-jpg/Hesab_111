@@ -15,7 +15,8 @@ export class MediaError extends Error {
   constructor(code) { super('Media request failed'); this.code = code; }
 }
 export function mediaFailureMessage(error) {
-  if (error?.code === 'FREEAI_KEY') return 'ساخت عکس و ویس هنوز وصل نشده 🌱 مدیر باید FREEAI_API_KEY رو در Secrets کلودفلر ثبت کنه؛ کلید رو در چت نفرست.';
+  if (error?.code === 'OPENROUTER_KEY') return 'برای ویس، کلید OpenRouter باید در Secrets ربات تنظیم باشه 🌱 کلید رو در چت نفرست؛ عکس همچنان از Free.ai استفاده می‌کنه.';
+  if (error?.code === 'FREEAI_KEY') return 'سرویس Free.ai هنوز وصل نشده 🌱 مدیر باید FREEAI_API_KEY رو در Secrets کلودفلر ثبت کنه؛ کلید رو در چت نفرست.';
   if (error?.code === 'FREEAI_VOICE') return 'برای مدل صوتی انتخاب‌شده باید صدای سازگار هم مشخص بشه 🌱 مدیر FREEAI_TTS_VOICE رو بررسی کنه. فعلاً برای ویس اعتباری مصرف نشد.';
   if (error?.code === 'ASSET_URL') return 'سرویس رسانه آدرس فایل خارج از مسیر مجاز برگردوند؛ برای امنیت فایل رو دریافت نکردم 🌱 تکرار خودکار انجام نمی‌شه.';
   if (error?.code === 'AUDIO_FORMAT') return 'سرویس فایل صوتی سازگار با ویس تلگرام نداد 🌱 خروجی صوتی یا WAV قابل‌تبدیل معتبر نبود. پاسخ متنی باقی مونده؛ تکرار خودکار نمی‌کنم.';
@@ -31,7 +32,7 @@ export function mediaFailureMessage(error) {
     };
     return reasons[rejected[2]] + ' 🌱 تکرار خودکار نداریم. کد امن: MEDIA_' + error.code;
   }
-  if (error?.code === 'HTTP_400' || error?.code === 'HTTP_422') return 'Free.ai درخواست رسانه رو نپذیرفت؛ از کد HTTP به‌تنهایی نمی‌شه گفت مشکل مدل، صدا یا فرمت بوده 🌱 تکرار خودکار نداریم. کد امن: MEDIA_' + error.code;
+  if (error?.code === 'HTTP_400' || error?.code === 'HTTP_422') return 'سرویس رسانه درخواست رو نپذیرفت؛ از کد HTTP به‌تنهایی نمی‌شه گفت مشکل مدل، صدا یا فرمت بوده 🌱 تکرار خودکار نداریم. کد امن: MEDIA_' + error.code;
   if (error?.code === 'HTTP_402') return 'اعتبار سرویس برای ساخت عکس یا ویس کافی نیست؛ مدیر ربات باید اعتبار سرویس رسانه رو بررسی کنه 🌱';
   if (error?.code === 'HTTP_429') return 'سرویس ساخت عکس یا ویس فعلاً شلوغه؛ کمی بعد دوباره امتحان کن 🌱';
   return 'نتونستم عکس یا ویس رو بسازم یا تحویل بدم 🌱 ممکنه مدل، محدودیت محتوا یا اتصال سرویس علتش باشه. تکرار خودکار نمی‌کنم تا دوباره اعتبار مصرف نشه.';
@@ -132,8 +133,14 @@ async function generateOpenRouterSpeech(env, answer) {
   if (!id3 && !frame) throw new MediaError('DATA');
   return { bytes, type: 'audio/mpeg', filename: 'amir-voice.mp3' };
 }
-// Selection is explicit; missing Free.ai configuration never charges OpenRouter.
-export function mediaProvider(env) { return env.MEDIA_PROVIDER || 'freeai'; }
+// Owner-approved split: images remain Free.ai; voice uses OpenRouter.
+// Legacy MEDIA_PROVIDER affects images only, so an existing 'freeai' dashboard
+// value cannot accidentally keep voice on the failing Free.ai route.
+// There is no cross-provider fallback after a failed request.
+export function mediaProvider(env, kind = 'image') {
+  return kind === 'voice' ? (env.MEDIA_VOICE_PROVIDER || 'openrouter')
+    : (env.MEDIA_IMAGE_PROVIDER || env.MEDIA_PROVIDER || 'freeai');
+}
 export function freeAISpeechConfiguration(env) {
   const model = env.FREEAI_TTS_MODEL?.trim() || DEFAULT_FREEAI_SPEECH_MODEL;
   const voice = env.FREEAI_TTS_VOICE?.trim() || (model === DEFAULT_FREEAI_SPEECH_MODEL ? DEFAULT_FREEAI_VOICE : null);
@@ -141,14 +148,14 @@ export function freeAISpeechConfiguration(env) {
   return { model, voice };
 }
 export function validateMediaConfiguration(env, kind) {
-  const provider = mediaProvider(env);
+  const provider = mediaProvider(env, kind);
   if (provider === 'freeai') {
     if (!env.FREEAI_API_KEY?.trim()) throw new MediaError('FREEAI_KEY');
     // A non-default model must supply its own compatible voice.
     if (kind === 'voice') freeAISpeechConfiguration(env);
-  } else if (provider !== 'openrouter' || !env.OPENROUTER_API_KEY) {
-    throw new MediaError('CONFIG');
-  }
+  } else if (provider === 'openrouter') {
+    if (!env.OPENROUTER_API_KEY?.trim()) throw new MediaError('OPENROUTER_KEY');
+  } else throw new MediaError('CONFIG');
 }
 // Read only a small error body and emit a closed set of categories. Never
 // return/store the raw message, names, URLs, prompt, response body or credentials.
@@ -248,7 +255,7 @@ async function downloadFreeAIAsset(env, value, kind) {
 }
 export async function generateImage(env, prompt) {
   validateMediaConfiguration(env, 'image');
-  if (mediaProvider(env) === 'openrouter') return generateOpenRouterImage(env, prompt);
+  if (mediaProvider(env, 'image') === 'openrouter') return generateOpenRouterImage(env, prompt);
   const data = await freeAIJson(env, 'image/generate', {
     prompt, model: env.FREEAI_IMAGE_MODEL?.trim() || 'sdxl', aspect_ratio: '1:1',
   }, 90_000);
@@ -256,7 +263,7 @@ export async function generateImage(env, prompt) {
 }
 export async function generateSpeech(env, answer) {
   validateMediaConfiguration(env, 'voice');
-  if (mediaProvider(env) === 'openrouter') return generateOpenRouterSpeech(env, answer);
+  if (mediaProvider(env, 'voice') === 'openrouter') return generateOpenRouterSpeech(env, answer);
   const text = speechText(answer);
   if (!text) throw new MediaError('DATA');
   const { model, voice } = freeAISpeechConfiguration(env);

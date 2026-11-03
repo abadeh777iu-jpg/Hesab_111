@@ -7,7 +7,7 @@ import { makeWav } from './fixtures/audio.mjs';
 
 // Exercise actual Workers binary decoding + multipart upload, not Node-only mocks.
 // Both upstream services are local fake bindings: no tokens or live paid calls.
-for (const provider of ['openrouter', 'freeai']) test(`Workers ${provider} media runtime decodes files and uploads multipart attachments`, async t => {
+for (const provider of ['openrouter', 'freeai', 'mixed']) test(`Workers ${provider} media runtime decodes files and uploads multipart attachments`, async t => {
   const helperPath = fileURLToPath(new URL('./media.mjs', import.meta.url));
   const entryPath = fileURLToPath(new URL('./media-runtime-entry.mjs', import.meta.url));
   const audioPath = fileURLToPath(new URL('./audio.mjs', import.meta.url));
@@ -17,7 +17,7 @@ for (const provider of ['openrouter', 'freeai']) test(`Workers ${provider} media
     modules: [{ type: 'ESModule', path: entryPath, contents: `
       import { generateImage, generateSpeech, uploadMedia } from './media.mjs';
       export default { async fetch(request, bindings) {
-        const env = { MEDIA_PROVIDER: '${provider}', OPENROUTER_API_KEY: 'fake-key', TELEGRAM_BOT_TOKEN: 'fake-token',
+        const env = { MEDIA_PROVIDER: '${provider === 'mixed' ? 'freeai' : provider}', ${provider === 'mixed' ? '' : `MEDIA_VOICE_PROVIDER: '${provider}',`} OPENROUTER_API_KEY: 'fake-key', TELEGRAM_BOT_TOKEN: 'fake-token',
           FREEAI_API_KEY: 'fake-free-key',
           fetchImpl: (url, options) => bindings.UPSTREAM.fetch(url, options) };
         try {

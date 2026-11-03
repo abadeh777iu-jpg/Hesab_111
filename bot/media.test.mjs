@@ -153,13 +153,13 @@ test('Free.ai requires its own key and a compatible explicit voice when overridi
   let calls = 0;
   const env = { OPENROUTER_API_KEY: 'keep-chat-key', fetchImpl: async () => { calls++; throw new Error('Should not call'); } };
   await assert.rejects(generateImage(env, 'snow'), { code: 'FREEAI_KEY' });
-  await assert.rejects(generateSpeech({ ...env, FREEAI_API_KEY: 'free-key', FREEAI_TTS_MODEL: 'custom-model' }, 'سلام'), { code: 'FREEAI_VOICE' });
+  await assert.rejects(generateSpeech({ ...env, MEDIA_VOICE_PROVIDER: 'freeai', FREEAI_API_KEY: 'free-key', FREEAI_TTS_MODEL: 'custom-model' }, 'سلام'), { code: 'FREEAI_VOICE' });
   assert.equal(calls, 0); // never falls back to the chat key or an English voice
 });
 
 test('Free.ai image adapter uses its own key and documented endpoint, then downloads without any credentials', async () => {
   const requests = [];
-  const file = await generateImage({ FREEAI_API_KEY: 'free-secret', OPENROUTER_API_KEY: 'chat-secret', fetchImpl: async (url, options) => {
+  const file = await generateImage({ MEDIA_VOICE_PROVIDER: 'freeai', FREEAI_API_KEY: 'free-secret', OPENROUTER_API_KEY: 'chat-secret', fetchImpl: async (url, options) => {
     requests.push({ url, options });
     assert.equal(options.redirect, 'manual');
     if (options.method === 'POST') {
@@ -178,7 +178,7 @@ test('Free.ai image adapter uses its own key and documented endpoint, then downl
 });
 
 test('Free.ai speech adapter sends only clean response text with explicit Persian language and chosen voice', async () => {
-  const file = await generateSpeech({ FREEAI_API_KEY: 'free-key', FREEAI_TTS_MODEL: 'configured-persian-model', FREEAI_TTS_VOICE: 'configured-persian-voice', fetchImpl: async (url, options) => {
+  const file = await generateSpeech({ MEDIA_VOICE_PROVIDER: 'freeai', FREEAI_API_KEY: 'free-key', FREEAI_TTS_MODEL: 'configured-persian-model', FREEAI_TTS_VOICE: 'configured-persian-voice', fetchImpl: async (url, options) => {
     if (options.method === 'POST') {
       assert.equal(url, 'https://api.free.ai/v1/tts/');
       assert.equal(options.headers.Authorization, 'Bearer free-key');
@@ -208,13 +208,13 @@ test('Free.ai asset URLs cannot target arbitrary hosts, private IPs, userinfo, n
     'data:image/png;base64,aaaa',
   ]) {
     let calls = 0;
-    await assert.rejects(generateImage({ FREEAI_API_KEY: 'free-key', fetchImpl: async () => {
+    await assert.rejects(generateImage({ MEDIA_VOICE_PROVIDER: 'freeai', FREEAI_API_KEY: 'free-key', fetchImpl: async () => {
       calls++; return Response.json({ image_url: url });
     } }, 'snow'), { code: 'ASSET_URL' });
     assert.equal(calls, 1, url); // no download request, no OpenRouter fallback
   }
   let calls = 0;
-  await assert.rejects(generateImage({ FREEAI_API_KEY: 'free-key', fetchImpl: async () => {
+  await assert.rejects(generateImage({ MEDIA_VOICE_PROVIDER: 'freeai', FREEAI_API_KEY: 'free-key', fetchImpl: async () => {
     calls++;
     if (calls === 1) return Response.json({ image_url: '/static/outputs/x.png' });
     return new Response(null, { status: 302, headers: { Location: 'https://private.invalid/secret' } });
@@ -229,7 +229,7 @@ test('Free.ai asset downloads have a byte cap and reject mismatched image signat
     new Response(png, { headers: { 'Content-Type': 'image/png', 'Content-Length': String(6 * 1024 * 1024) } }),
   ]) {
     let calls = 0;
-    await assert.rejects(generateImage({ FREEAI_API_KEY: 'key', fetchImpl: async () => {
+    await assert.rejects(generateImage({ MEDIA_VOICE_PROVIDER: 'freeai', FREEAI_API_KEY: 'key', fetchImpl: async () => {
       calls++; return calls === 1 ? Response.json({ url: 'https://free.ai/static/outputs/x.png' }) : response;
     } }, 'snow'));
     assert.equal(calls, 2);
@@ -243,7 +243,7 @@ test('Free.ai rejects malformed WAV or non-Opus OGG instead of relabeling files'
     ['audio/mp4', new TextEncoder().encode('not an m4a file')],
   ]) {
     let calls = 0;
-    await assert.rejects(generateSpeech({ FREEAI_API_KEY: 'key', FREEAI_TTS_MODEL: 'model', FREEAI_TTS_VOICE: 'voice', fetchImpl: async () => {
+    await assert.rejects(generateSpeech({ MEDIA_VOICE_PROVIDER: 'freeai', FREEAI_API_KEY: 'key', FREEAI_TTS_MODEL: 'model', FREEAI_TTS_VOICE: 'voice', fetchImpl: async () => {
       calls++; return calls === 1 ? Response.json({ audio_url: '/static/outputs/test.wav' }) : new Response(bytes, { headers: { 'Content-Type': type } });
     } }, 'سلام'), { code: 'AUDIO_FORMAT' });
   }
@@ -255,7 +255,7 @@ test('Free.ai accepts supported Opus and M4A voice containers without a conversi
     ['audio/mp4', Uint8Array.from([0, 0, 0, 24, ...new TextEncoder().encode('ftypM4A ')]), 'audio/mp4'],
   ]) {
     let calls = 0;
-    const file = await generateSpeech({ FREEAI_API_KEY: 'key', FREEAI_TTS_MODEL: 'model', FREEAI_TTS_VOICE: 'voice', fetchImpl: async () => {
+    const file = await generateSpeech({ MEDIA_VOICE_PROVIDER: 'freeai', FREEAI_API_KEY: 'key', FREEAI_TTS_MODEL: 'model', FREEAI_TTS_VOICE: 'voice', fetchImpl: async () => {
       calls++; return calls === 1 ? Response.json({ audio_url: '/static/outputs/test.ogg' }) : new Response(bytes, { headers: { 'Content-Type': type } });
     } }, 'سلام');
     assert.equal(file.type, expected);
@@ -266,7 +266,7 @@ test('Free.ai accepts supported Opus and M4A voice containers without a conversi
 
 test('Free.ai voice defaults to Persian Piper and converts returned WAV locally with no paid conversion call', async () => {
   let calls = 0;
-  const file = await generateSpeech({ FREEAI_API_KEY: 'free-key', fetchImpl: async (url, options) => {
+  const file = await generateSpeech({ MEDIA_VOICE_PROVIDER: 'freeai', FREEAI_API_KEY: 'free-key', fetchImpl: async (url, options) => {
     calls++;
     if (options.method === 'POST') {
       assert.equal(url, 'https://api.free.ai/v1/tts/');
@@ -314,7 +314,7 @@ test('Free.ai 400 is not blamed on voice without explicit evidence; only fixed d
 
 test('bounded Free.ai error-body inspection classifies rejection without retrying or retaining secrets', async () => {
   let calls = 0;
-  const env = { FREEAI_API_KEY: 'free-key', fetchImpl: async () => {
+  const env = { MEDIA_VOICE_PROVIDER: 'freeai', FREEAI_API_KEY: 'free-key', fetchImpl: async () => {
     calls++;
     return Response.json({ error: { error: 'Unknown voice: sk-free-do-not-display', private_context: 'user transcript' } }, { status: 400 });
   } };
@@ -326,6 +326,21 @@ test('bounded Free.ai error-body inspection classifies rejection without retryin
   });
   assert.equal(calls, 1);
   for (const response of [new Response('bad json', { status: 400 }), new Response('x'.repeat(17 * 1024), { status: 400 }), new Response(null, { status: 400 })]) {
-    await assert.rejects(generateSpeech({ FREEAI_API_KEY: 'key', fetchImpl: async () => response }, 'سلام'), { code: 'HTTP_400' });
+    await assert.rejects(generateSpeech({ MEDIA_VOICE_PROVIDER: 'freeai', FREEAI_API_KEY: 'key', fetchImpl: async () => response }, 'سلام'), { code: 'HTTP_400' });
   }
+});
+
+test('voice defaults to OpenRouter independently of legacy image provider and uses only its key', async () => {
+  let calls = 0;
+  const file = await generateSpeech({ MEDIA_PROVIDER: 'freeai', OPENROUTER_API_KEY: 'chat-key', FREEAI_API_KEY: 'free-key', fetchImpl: async (url, options) => {
+    calls++;
+    assert.equal(url, 'https://openrouter.ai/api/v1/audio/speech');
+    assert.equal(options.headers.Authorization, 'Bearer chat-key');
+    assert.ok(!JSON.stringify(options).includes('free-key'));
+    assert.equal(JSON.parse(options.body).voice, 'onyx');
+    return new Response(Uint8Array.from([73, 68, 51, 0]), { headers: { 'Content-Type': 'audio/mpeg' } });
+  } }, 'سلام رفیق');
+  assert.equal(calls, 1);
+  assert.equal(file.type, 'audio/mpeg');
+  await assert.rejects(generateSpeech({ FREEAI_API_KEY: 'free-key', fetchImpl: async () => { throw new Error('No fallback'); } }, 'سلام'), { code: 'OPENROUTER_KEY' });
 });

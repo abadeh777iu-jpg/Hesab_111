@@ -639,7 +639,8 @@ test('per-chat budget cleanup alarm survives history expiry and removes only its
 
 function freeAIMediaSetup() {
   const rig = mediaSetup();
-  delete rig.env.MEDIA_PROVIDER; // new default, even with an OpenRouter chat key
+  delete rig.env.MEDIA_PROVIDER;
+  rig.env.MEDIA_VOICE_PROVIDER = 'freeai'; // explicitly exercise the opt-in Free.ai adapter
   rig.env.FREEAI_API_KEY = 'freeai-secret';
   rig.env.FREEAI_TTS_MODEL = 'configured-persian-model';
   rig.env.FREEAI_TTS_VOICE = 'configured-persian-voice';
@@ -795,4 +796,64 @@ test('a rejected Free.ai voice shows only its safe diagnostic code and retains t
   assert.ok(!messages.join(' ').includes('private-transcript'));
   assert.ok(!messages.join(' ').includes('sk-free-secret'));
   assert.equal(state.get('mediaUsage').voice, 1);
+});
+
+test('approved default split keeps images on Free.ai but sends voice only to OpenRouter, even with legacy provider=freeai', async t => {
+  let now = 1_800_000_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const { env, calls, state } = freeAIMediaSetup();
+  delete env.MEDIA_VOICE_PROVIDER;
+  env.MEDIA_PROVIDER = 'freeai';
+  // A previously failing Free.ai voice selection must not affect the new route.
+  env.FREEAI_TTS_MODEL = 'unsupported-old-model';
+  env.FREEAI_TTS_VOICE = 'unsupported-old-voice';
+  const original = env.fetchImpl;
+  env.fetchImpl = async (url, options) => {
+    if (url.includes('openrouter.ai')) assert.equal(options.headers.Authorization, 'Bearer test-key');
+    return original(url, options);
+  };
+  const worker = createWorker();
+  await worker.fetch(request(update(1, '/image snow')), env);
+  now += 60_000;
+  await worker.fetch(request(update(2, '/voice سلام')), env);
+  assert.equal(calls.filter(call => call.url.endsWith('/v1/image/generate/')).length, 1);
+  assert.equal(calls.filter(call => call.url.endsWith('/api/v1/images')).length, 0);
+  assert.equal(calls.filter(call => call.url.endsWith('/audio/speech')).length, 1);
+  assert.equal(calls.filter(call => call.url.endsWith('/v1/tts/')).length, 0);
+  assert.equal(calls.filter(call => call.url.endsWith('/sendPhoto')).length, 1);
+  assert.equal(calls.filter(call => call.url.endsWith('/sendVoice')).length, 1);
+  assert.equal(state.get('mediaUsage').voice, 1);
+  assert.equal(state.get('mediaUsage').image, 1);
+  assert.equal(state.has('weather'), false);
+  assert.equal(state.has('followup'), false);
+});
+
+test('switching the voice provider does not clear spent attempts or require a Free.ai key for voice', async t => {
+  const now = 1_800_000_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const { env, calls, state, budgetState } = freeAIMediaSetup();
+  delete env.MEDIA_VOICE_PROVIDER;
+  delete env.FREEAI_API_KEY;
+  state.set('mediaUsage', { voice: 2, image: 2, lastAt: now - 60_000, expiresAt: nextMediaDay(now) });
+  budgetState.set('budget', { voice: 2, image: 2, expiresAt: nextMediaDay(now) });
+  const worker = createWorker();
+  await worker.fetch(request(update(1, '/voice سلام')), env);
+  await worker.fetch(request(update(2, '/voice دوباره سلام')), env);
+  assert.equal(calls.filter(call => call.url.endsWith('/audio/speech')).length, 1);
+  assert.equal(calls.filter(call => call.url.includes('api.free.ai')).length, 0);
+  assert.equal(state.get('mediaUsage').voice, 3);
+  assert.equal(state.get('mediaUsage').image, 2);
+  assert.equal(budgetState.get('budget').voice, 3);
+  assert.ok(calls.at(-1).body.text.includes('سهمیهٔ امروزت'));
+});
+
+test('OpenRouter voice rejection never retries or falls back to Free.ai', async () => {
+  const { env, calls } = freeAIMediaSetup();
+  delete env.MEDIA_VOICE_PROVIDER;
+  env.failSpeech = true;
+  await createWorker().fetch(request(update(1, '/voice سلام')), env);
+  assert.equal(calls.filter(call => call.url.endsWith('/audio/speech')).length, 1);
+  assert.equal(calls.filter(call => call.url.includes('api.free.ai')).length, 0);
+  assert.equal(calls.filter(call => call.url.endsWith('/sendVoice')).length, 0);
+  assert.ok(calls.at(-1).body.text.includes('اعتبار'));
 });
