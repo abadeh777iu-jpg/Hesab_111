@@ -183,13 +183,13 @@ export class ChatSession {
     const now = Date.now();
     let usage = await this.ctx.storage.get('mediaUsage');
     if (!usage || usage.expiresAt <= now) usage = { image: 0, voice: 0, expiresAt: nextMediaDay(now), lastAt: null };
-    if (usage[kind] >= PERSONAL_MEDIA_LIMITS[kind]) return 'سهمیهٔ امروزت تموم شده 🌱 هر نفر روزی یک عکس و سه ویس می‌تونه درخواست کنه؛ سهمیه در نیمه‌شب UTC نو می‌شه.';
+    if (usage[kind] >= PERSONAL_MEDIA_LIMITS[kind]) return 'سهمیهٔ امروزت تموم شده 🌱 هر نفر روزی پنج عکس و سه ویس می‌تونه درخواست کنه؛ سهمیه در نیمه‌شب UTC نو می‌شه.';
     if (usage.lastAt !== null && now - usage.lastAt < 60_000) return 'بین درخواست عکس و ویس یک دقیقه فاصله بذار 🌱';
     const id = this.env.MEDIA.idFromName('media-budget');
     const grant = await this.env.MEDIA.get(id).fetch('https://media.internal/reserve', {
       method: 'POST', body: JSON.stringify({ kind }),
     });
-    if (grant.status === 429) return 'سهمیهٔ امروزِ کل ربات تموم شده 🌱 برای کنترل هزینه، روزی حداکثر سه عکس و ده ویس برای همهٔ مخاطب‌ها داریم.';
+    if (grant.status === 429) return 'سهمیهٔ امروزِ کل ربات تموم شده 🌱 برای کنترل هزینه، روزی حداکثر ده عکس و ده ویس برای همهٔ مخاطب‌ها داریم.';
     if (!grant.ok) throw new Error('Media budget unavailable');
     usage[kind]++;
     usage.lastAt = now;
@@ -285,7 +285,7 @@ export class ChatSession {
       if (command === '/about') { await this.send(chat, ABOUT); return ok(); }
       if (command === '/privacy') { await this.send(chat, CLOUD_PRIVACY); return ok(); }
       if (command === '/help') {
-        await this.send(chat, '/start سلام و شروع دوباره\n/about دربارهٔ امیر\n/reset پاک‌کردن حافظهٔ فعال گفتگو\n/privacy حریم خصوصی\n/followup فعال‌سازی دوبارهٔ احوال‌پرسی\n/stop لغو همهٔ پیام‌های خودکار\n/image توضیح عکس دلخواه\n/voice سؤال یا خواندن پاسخ قبلی با صدای مصنوعی\n/prices قیمت دلار و طلا\n/city نام شهر\n/weather وضعیت هوا\n/test_snow تست شخصی برف (آزمایشی)\n/alerts فعال‌کردن هشدار بارش\n/weatherstop خاموش‌کردن هشدار هوا\n/forgetcity حذف شهر\n\nورودی فقط متن در چت خصوصی؛ عکس و ویس فقط با درخواست خودت، از اعتبار مدیر و با سقف مصرف. هر نفر روزی یک عکس و سه ویس؛ کل ربات سه عکس و ده ویس (روز UTC). صدای ویس مصنوعیه. من هوش مصنوعی‌ام و جایگزین درمانگر یا خدمات اضطراری نیستم.');
+        await this.send(chat, '/start سلام و شروع دوباره\n/about دربارهٔ امیر\n/reset پاک‌کردن حافظهٔ فعال گفتگو\n/privacy حریم خصوصی\n/followup فعال‌سازی دوبارهٔ احوال‌پرسی\n/stop لغو همهٔ پیام‌های خودکار\n/image توضیح عکس دلخواه\n/voice سؤال یا خواندن پاسخ قبلی با صدای مصنوعی\n/prices قیمت دلار و طلا\n/city نام شهر\n/weather وضعیت هوا\n/test_snow تست شخصی برف (آزمایشی)\n/alerts فعال‌کردن هشدار بارش\n/weatherstop خاموش‌کردن هشدار هوا\n/forgetcity حذف شهر\n\nورودی فقط متن در چت خصوصی؛ عکس و ویس فقط با درخواست خودت، از اعتبار مدیر و با سقف مصرف. هر نفر روزی پنج عکس و سه ویس؛ کل ربات ده عکس و ده ویس (روز UTC). صدای ویس مصنوعیه. من هوش مصنوعی‌ام و جایگزین درمانگر یا خدمات اضطراری نیستم.');
         return ok();
       }
       if (command === '/test_snow') {

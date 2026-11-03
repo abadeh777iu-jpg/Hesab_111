@@ -574,6 +574,10 @@ test('personal daily limits and shared cooldown survive /reset, history expiry a
   assert.ok(calls.at(-1).body.text.includes('یک دقیقه'));
   now += 60_000;
   await worker.fetch(request(update(3, '/image snow')), env);
+  for (let id = 20; id < 24; id++) {
+    now += 60_000;
+    await worker.fetch(request(update(id, '/image snow')), env);
+  }
   await worker.fetch(request(update(4, '/reset')), env);
   now += 31 * 60_000;
   const recreated = new ChatSession({ storage }, env);
@@ -585,7 +589,7 @@ test('personal daily limits and shared cooldown survive /reset, history expiry a
   now += 60_000;
   await recreated.fetch(request(update(8, '/voice بیشتر')));
   assert.ok(calls.at(-1).body.text.includes('سهمیهٔ امروزت'));
-  assert.equal(calls.filter(call => call.url.endsWith('/images')).length, 1);
+  assert.equal(calls.filter(call => call.url.endsWith('/images')).length, 5);
   assert.equal(calls.filter(call => call.url.endsWith('/audio/speech')).length, 3);
   assert.equal(state.get('mediaUsage').voice, 3);
 });
@@ -718,4 +722,39 @@ test('Free.ai failure or unsafe returned asset retains budget claim and never re
   assert.equal(calls.filter(call => call.url.includes('127.0.0.1') || call.url.includes('openrouter.ai')).length, 0);
   assert.equal(state.get('mediaUsage').image, 1);
   assert.ok(calls.at(-1).body.text.includes('مسیر مجاز'));
+});
+
+test('Free.ai permits five images per person, ten in total, and refreshes both quotas on the next UTC day', async t => {
+  let now = 1_800_000_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const first = freeAIMediaSetup();
+  const second = freeAIMediaSetup();
+  const third = freeAIMediaSetup();
+  second.env.MEDIA = first.env.MEDIA;
+  third.env.MEDIA = first.env.MEDIA;
+  second.env.TELEGRAM_ALLOWED_USER_IDS = '43';
+  third.env.TELEGRAM_ALLOWED_USER_IDS = '44';
+  const worker = createWorker();
+  for (let i = 1; i <= 5; i++) {
+    await worker.fetch(request(update(i, '/image snow', 42)), first.env);
+    await worker.fetch(request(update(100 + i, '/image snow', 43)), second.env);
+    now += 60_000;
+  }
+  assert.equal(first.calls.filter(call => call.url.endsWith('/v1/image/generate/')).length, 5);
+  assert.equal(second.calls.filter(call => call.url.endsWith('/v1/image/generate/')).length, 5);
+  assert.equal(first.state.get('mediaUsage').image, 5);
+  assert.equal(second.state.get('mediaUsage').image, 5);
+  assert.equal(first.budgetState.get('budget').image, 10);
+  await worker.fetch(request(update(6, '/image sixth', 42)), first.env);
+  assert.ok(first.calls.at(-1).body.text.includes('پنج عکس'));
+  assert.equal(first.calls.filter(call => call.url.endsWith('/v1/image/generate/')).length, 5);
+  await worker.fetch(request(update(200, '/image eleventh', 44)), third.env);
+  assert.ok(third.calls.at(-1).body.text.includes('ده عکس'));
+  assert.equal(third.calls.filter(call => call.url.includes('api.free.ai')).length, 0);
+  assert.equal(third.state.has('mediaUsage'), false);
+  now = nextMediaDay(now);
+  await worker.fetch(request(update(7, '/image new day', 42)), first.env);
+  assert.equal(first.calls.filter(call => call.url.endsWith('/v1/image/generate/')).length, 6);
+  assert.equal(first.state.get('mediaUsage').image, 1);
+  assert.equal(first.budgetState.get('budget').image, 1);
 });

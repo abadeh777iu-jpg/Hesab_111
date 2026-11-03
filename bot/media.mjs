@@ -1,7 +1,7 @@
 // Fixed API upstreams only. Free.ai assets use a restricted static-output allowlist,
 // are downloaded without credentials, validated, and uploaded as bytes to Telegram.
-export const GLOBAL_MEDIA_LIMITS = Object.freeze({ image: 3, voice: 10 });
-export const PERSONAL_MEDIA_LIMITS = Object.freeze({ image: 1, voice: 3 });
+export const GLOBAL_MEDIA_LIMITS = Object.freeze({ image: 10, voice: 10 });
+export const PERSONAL_MEDIA_LIMITS = Object.freeze({ image: 5, voice: 3 });
 export const DEFAULT_IMAGE_MODEL = 'bytedance-seed/seedream-4.5';
 export const DEFAULT_SPEECH_MODEL = 'openai/gpt-4o-mini-tts-2025-12-15';
 const MAX_FILE = 5 * 1024 * 1024;

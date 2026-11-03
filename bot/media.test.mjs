@@ -122,11 +122,11 @@ function budgetSetup() {
 test('one shared serialized budget prevents concurrent overspend and stores no users or prompts', async t => {
   t.mock.method(Date, 'now', () => 1_800_000_000_000);
   const { reserve, data, alarmAt } = budgetSetup();
-  const images = await Promise.all(Array.from({ length: 10 }, () => reserve('image')));
-  assert.equal(images.filter(reply => reply.ok).length, 3);
+  const images = await Promise.all(Array.from({ length: 20 }, () => reserve('image')));
+  assert.equal(images.filter(reply => reply.ok).length, 10);
   const voices = await Promise.all(Array.from({ length: 15 }, () => reserve('voice')));
   assert.equal(voices.filter(reply => reply.ok).length, 10);
-  assert.deepEqual(data.get('budget'), { image: 3, voice: 10, expiresAt: nextMediaDay() });
+  assert.deepEqual(data.get('budget'), { image: 10, voice: 10, expiresAt: nextMediaDay() });
   assert.equal(alarmAt(), nextMediaDay());
   assert.equal((await reserve('__proto__')).status, 400);
 });
@@ -138,8 +138,7 @@ test('global budget recovers after object recreation, resets at UTC day boundary
   await reserve('image');
   const recreated = new MediaBudgetHandler(handler.ctx);
   const response = () => recreated.fetch(new Request('https://budget.internal', { method: 'POST', body: JSON.stringify({ kind: 'image' }) }));
-  assert.equal((await response()).status, 200);
-  assert.equal((await response()).status, 200);
+  for (let i = 0; i < 9; i++) assert.equal((await response()).status, 200);
   assert.equal((await response()).status, 429);
   now = nextMediaDay(now);
   assert.equal((await response()).status, 200);
