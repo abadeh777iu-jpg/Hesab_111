@@ -3,12 +3,13 @@ import { handleSetup } from './setup.mjs';
 import { formatReply } from './format.mjs';
 import { WeatherAssistant, nextWeatherWake } from './weather-assistant.mjs';
 import { isMarketQuestion, isWeatherQuestion } from './live-data.mjs';
+import { parseMediaRequest, PERSONAL_MEDIA_LIMITS, nextMediaDay, generateImage, generateSpeech, uploadMedia, mediaFailureMessage } from './media.mjs';
 
 const TTL = 30 * 60_000;
 export const FOLLOWUP_NOTICE = OUTREACH_NOTICE;
 export const FOLLOWUP_DELAY = 24 * 60 * 60_000;
 export const FOLLOWUP_TEXT = 'سلام رفیق، امروز چطوری؟ 🙂🌱\n\nلغو احوال‌پرسی: /stop';
-export const CLOUD_PRIVACY = 'پیام‌ها برای پاسخ به OpenRouter و ارائه‌دهندهٔ مدل ارسال می‌شن. حداکثر ۳۰ پیام اخیر در کلودفلر نگه داشته و بعد از ۳۰ دقیقه بی‌فعالیتی یا /reset از حافظهٔ فعال حذف می‌شن. احوال‌پرسی پس از اطلاع کوتاه در گفتگو خودکار فعاله؛ حدود ۲۴ ساعت بعد از آخرین پیام، یک پیام عمومی می‌فرستیم، نه پیام تکراری روزانه. لغو: /stop — فعال‌سازی دوباره: /followup. شناسهٔ چت و زمان ارسال جدا از متن گفتگو ذخیره می‌شن؛ با لغو، این دو حذف و فقط ترجیح خاموشی نگه داشته می‌شه تا با پیام جدید یا /start دوباره فعال نشه. /reset هم پیگیری رو خاموش می‌کنه. پیام‌های تلگرام، داده‌های سرویس مدل و نسخه‌های پشتیبان تابع سیاست همون سرویس‌ها هستن. شهر پیش‌فرض آباده، فارس است، نه لزوماً محل زندگی تو. پیام‌های خودکار بعد از اطلاع کلیِ پیام‌دادن فعال می‌شن. جملهٔ همراه خبر هوا با OpenRouter تولید می‌شه؛ اگر گفتگوی تازه‌ای باشه، فقط یک نشانهٔ کلی برای ملایم‌ترشدن لحن به‌صورت محلی گرفته می‌شه؛ متن خصوصی گفتگو در درخواست نوشتن جمله فرستاده نمی‌شه. شهر دلخواه و مختصات تقریبی آن جداگانه برای هوا نگه داشته و به Open-Meteo ارسال می‌شه؛ حذف شهر و هشدارها: /forgetcity یا /reset. ترجیح خاموشی هوا هم جدا نگه داشته می‌شه تا با پیام جدید دوباره فعال نشه. /stop همهٔ پیام‌های خودکار رو خاموش می‌کنه. زمان درخواست تست برف فقط برای محدودکردن مصرف تا یک ساعت نگه داشته می‌شه. لطفاً اطلاعات حساس نفرست.';
+export const CLOUD_PRIVACY = 'پیام‌ها برای پاسخ به OpenRouter و ارائه‌دهندهٔ مدل ارسال می‌شن. حداکثر ۳۰ پیام اخیر در کلودفلر نگه داشته و بعد از ۳۰ دقیقه بی‌فعالیتی یا /reset از حافظهٔ فعال حذف می‌شن. احوال‌پرسی پس از اطلاع کوتاه در گفتگو خودکار فعاله؛ حدود ۲۴ ساعت بعد از آخرین پیام، یک پیام عمومی می‌فرستیم، نه پیام تکراری روزانه. لغو: /stop — فعال‌سازی دوباره: /followup. شناسهٔ چت و زمان ارسال جدا از متن گفتگو ذخیره می‌شن؛ با لغو، این دو حذف و فقط ترجیح خاموشی نگه داشته می‌شه تا با پیام جدید یا /start دوباره فعال نشه. /reset هم پیگیری رو خاموش می‌کنه. پیام‌های تلگرام، داده‌های سرویس مدل و نسخه‌های پشتیبان تابع سیاست همون سرویس‌ها هستن. شهر پیش‌فرض آباده، فارس است، نه لزوماً محل زندگی تو. پیام‌های خودکار بعد از اطلاع کلیِ پیام‌دادن فعال می‌شن. جملهٔ همراه خبر هوا با OpenRouter تولید می‌شه؛ اگر گفتگوی تازه‌ای باشه، فقط یک نشانهٔ کلی برای ملایم‌ترشدن لحن به‌صورت محلی گرفته می‌شه؛ متن خصوصی گفتگو در درخواست نوشتن جمله فرستاده نمی‌شه. شهر دلخواه و مختصات تقریبی آن جداگانه برای هوا نگه داشته و به Open-Meteo ارسال می‌شه؛ حذف شهر و هشدارها: /forgetcity یا /reset. ترجیح خاموشی هوا هم جدا نگه داشته می‌شه تا با پیام جدید دوباره فعال نشه. /stop همهٔ پیام‌های خودکار رو خاموش می‌کنه. زمان درخواست تست برف فقط برای محدودکردن مصرف تا یک ساعت نگه داشته می‌شه. برای عکس، توضیح درخواستی و برای ویس، متن پاسخ به OpenRouter و مدل مربوط فرستاده می‌شه؛ فایل ساخته‌شده به تلگرام ارسال می‌شه ولی این برنامه فایل رو ذخیره یا لاگ نمی‌کنه. ویس صدای مصنوعیه، نه صدای واقعی امیر. بودجهٔ مصرف عکس و ویس بدون متن یا فایل تا پایان روز UTC نگه داشته می‌شه؛ /reset این محدودیت مصرف رو پاک نمی‌کنه. لطفاً اطلاعات حساس نفرست.';
 const ABOUT = `${PERSONA_GREETING}\n\n${CLOUD_PRIVACY}\n\nلغو احوال‌پرسی: /stop — فعال‌سازی دوباره: /followup\n\nاین روزها مشغول چه کاری هستی و کجاش گیر کردی؟`;
 const FAILURE = 'الان نتونستم پاسخ رو آماده یا ارسال کنم. لطفاً کمی بعد دوباره پیام بده. اگر در خطر فوری هستی، منتظر ربات نمون و با خدمات اضطراری محل یا یک فرد مطمئن تماس بگیر.';
 const ok = () => new Response('OK');
@@ -103,6 +104,8 @@ export class ChatSession {
           await this.disableFollowup();
         }
       }
+      const mediaUsage = await this.ctx.storage.get('mediaUsage');
+      if (mediaUsage?.expiresAt <= Date.now()) await this.ctx.storage.delete('mediaUsage');
       await this.weather.alarm();
       await this.scheduleAlarm();
     });
@@ -114,7 +117,8 @@ export class ChatSession {
     const followup = await this.ctx.storage.get('followup');
     const weather = await this.ctx.storage.get('weather');
     const preview = await this.ctx.storage.get('snowPreview');
-    const times = [record?.expiresAt, (followup?.disabled ? null : followup?.dueAt), nextWeatherWake(weather), preview?.expiresAt].filter(time => Number.isFinite(time) && time > 0);
+    const mediaUsage = await this.ctx.storage.get('mediaUsage');
+    const times = [record?.expiresAt, (followup?.disabled ? null : followup?.dueAt), nextWeatherWake(weather), preview?.expiresAt, mediaUsage?.expiresAt].filter(time => Number.isFinite(time) && time > 0);
     if (times.length) await this.ctx.storage.setAlarm(Math.min(...times));
     else await this.ctx.storage.deleteAlarm();
   }
@@ -122,7 +126,8 @@ export class ChatSession {
     const followup = { chatId, dueAt: Date.now() + FOLLOWUP_DELAY, noticeShown: true, disabled: false };
     const weather = await this.ctx.storage.get('weather');
     const preview = await this.ctx.storage.get('snowPreview');
-    await this.ctx.storage.setAlarm(Math.min(record.expiresAt, followup.dueAt, nextWeatherWake(weather) || Infinity, preview?.expiresAt || Infinity));
+    const mediaUsage = await this.ctx.storage.get('mediaUsage');
+    await this.ctx.storage.setAlarm(Math.min(record.expiresAt, followup.dueAt, nextWeatherWake(weather) || Infinity, preview?.expiresAt || Infinity, mediaUsage?.expiresAt || Infinity));
     await this.ctx.storage.put('followup', followup);
   }
   async disableFollowup() {
@@ -170,8 +175,72 @@ export class ChatSession {
     const followup = await this.ctx.storage.get('followup');
     const weather = await this.ctx.storage.get('weather');
     const preview = await this.ctx.storage.get('snowPreview');
-    await this.ctx.storage.setAlarm(Math.min(record.expiresAt, (followup?.disabled ? Infinity : followup?.dueAt || Infinity), nextWeatherWake(weather) || Infinity, preview?.expiresAt || Infinity));
+    const mediaUsage = await this.ctx.storage.get('mediaUsage');
+    await this.ctx.storage.setAlarm(Math.min(record.expiresAt, (followup?.disabled ? Infinity : followup?.dueAt || Infinity), nextWeatherWake(weather) || Infinity, preview?.expiresAt || Infinity, mediaUsage?.expiresAt || Infinity));
     await this.ctx.storage.put('session', record);
+  }
+  async reserveMedia(kind) {
+    const now = Date.now();
+    let usage = await this.ctx.storage.get('mediaUsage');
+    if (!usage || usage.expiresAt <= now) usage = { image: 0, voice: 0, expiresAt: nextMediaDay(now), lastAt: null };
+    if (usage[kind] >= PERSONAL_MEDIA_LIMITS[kind]) return 'سهمیهٔ امروزت تموم شده 🌱 هر نفر روزی یک عکس و سه ویس می‌تونه درخواست کنه؛ سهمیه در نیمه‌شب UTC نو می‌شه.';
+    if (usage.lastAt !== null && now - usage.lastAt < 60_000) return 'بین درخواست عکس و ویس یک دقیقه فاصله بذار 🌱';
+    const id = this.env.MEDIA.idFromName('media-budget');
+    const grant = await this.env.MEDIA.get(id).fetch('https://media.internal/reserve', {
+      method: 'POST', body: JSON.stringify({ kind }),
+    });
+    if (grant.status === 429) return 'سهمیهٔ امروزِ کل ربات تموم شده 🌱 برای کنترل هزینه، روزی حداکثر سه عکس و ده ویس برای همهٔ مخاطب‌ها داریم.';
+    if (!grant.ok) throw new Error('Media budget unavailable');
+    usage[kind]++;
+    usage.lastAt = now;
+    // Cleanup alarm before writing; /reset and expiring history cannot bypass it.
+    await this.ctx.storage.setAlarm(Math.min(now + TTL, usage.expiresAt));
+    await this.ctx.storage.put('mediaUsage', usage);
+    await this.scheduleAlarm();
+    return null;
+  }
+  async handleMedia(chat, request, record) {
+    const { kind, prompt } = request;
+    if (this.env.MEDIA_ENABLED === 'false' || !this.env.MEDIA) {
+      await this.send(chat, 'ساخت عکس و ویس فعلاً فعال نیست 🌱'); return;
+    }
+    if (prompt.length > 2000) {
+      await this.send(chat, 'برای عکس یا ویس، توضیحت رو کوتاه‌تر از ۲۰۰۰ کاراکتر بفرست 🌱'); return;
+    }
+    const previous = [...record.messages].reverse().find(message => message.role === 'assistant')?.content;
+    if ((kind === 'image' && !prompt) || (kind === 'voice' && !prompt && !previous)) {
+      await this.send(chat, kind === 'image'
+        ? 'چی برات بسازم؟ 🎨 مثلاً: /image یه کلبه وسط برف'
+        : 'برای ویس، سؤالت رو بنویس 🎙️ مثلاً: /voice چطور کارمو شروع کنم؟\nیا بعد از جواب متنی، /voice بفرست. صدای مصنوعیه، نه صدای واقعی امیر.');
+      return;
+    }
+    try {
+      const denied = await this.reserveMedia(kind);
+      if (denied) { await this.send(chat, denied); return; }
+      if (kind === 'image') {
+        await this.send(chat, 'دارم عکست رو می‌سازم 🎨✨ ممکنه کمی طول بکشه.');
+        await uploadMedia(this.env, chat, kind, await generateImage(this.env, prompt));
+      } else {
+        let answer = previous;
+        if (prompt) {
+          const messages = [...record.messages, { role: 'user', content: prompt }];
+          answer = await complete({
+            apiKey: this.env.OPENROUTER_API_KEY, model: this.env.OPENROUTER_MODEL,
+            style: this.env.BOT_STYLE, messages,
+            fetchImpl: this.env.fetchImpl || fetch, timeoutMs: 20_000,
+          });
+          // Keep the readable answer even if synthesis or delivery later fails.
+          await this.sendReply(chat, answer);
+          record.messages = [...messages, { role: 'assistant', content: answer }].slice(-HISTORY_LIMIT);
+          record.expiresAt = Date.now() + TTL;
+          await this.persist(record);
+        }
+        await uploadMedia(this.env, chat, kind, await generateSpeech(this.env, answer));
+      }
+    } catch (error) {
+      // No raw upstream errors, bodies, prompts, files or token-bearing URLs.
+      await this.send(chat, mediaFailureMessage(error));
+    }
   }
   async process(update) {
     let record = await this.ctx.storage.get('session');
@@ -215,7 +284,7 @@ export class ChatSession {
       if (command === '/about') { await this.send(chat, ABOUT); return ok(); }
       if (command === '/privacy') { await this.send(chat, CLOUD_PRIVACY); return ok(); }
       if (command === '/help') {
-        await this.send(chat, '/start سلام و شروع دوباره\n/about دربارهٔ امیر\n/reset پاک‌کردن حافظهٔ فعال گفتگو\n/privacy حریم خصوصی\n/followup فعال‌سازی دوبارهٔ احوال‌پرسی\n/stop لغو همهٔ پیام‌های خودکار\n/prices قیمت دلار و طلا\n/city نام شهر\n/weather وضعیت هوا\n/test_snow تست شخصی برف (آزمایشی)\n/alerts فعال‌کردن هشدار بارش\n/weatherstop خاموش‌کردن هشدار هوا\n/forgetcity حذف شهر\n\nفقط متن در چت خصوصی. من هوش مصنوعی‌ام و جایگزین درمانگر یا خدمات اضطراری نیستم.');
+        await this.send(chat, '/start سلام و شروع دوباره\n/about دربارهٔ امیر\n/reset پاک‌کردن حافظهٔ فعال گفتگو\n/privacy حریم خصوصی\n/followup فعال‌سازی دوبارهٔ احوال‌پرسی\n/stop لغو همهٔ پیام‌های خودکار\n/image توضیح عکس دلخواه\n/voice سؤال یا خواندن پاسخ قبلی با صدای مصنوعی\n/prices قیمت دلار و طلا\n/city نام شهر\n/weather وضعیت هوا\n/test_snow تست شخصی برف (آزمایشی)\n/alerts فعال‌کردن هشدار بارش\n/weatherstop خاموش‌کردن هشدار هوا\n/forgetcity حذف شهر\n\nورودی فقط متن در چت خصوصی؛ عکس و ویس فقط با درخواست خودت، از اعتبار مدیر و با سقف مصرف. هر نفر روزی یک عکس و سه ویس؛ کل ربات سه عکس و ده ویس (روز UTC). صدای ویس مصنوعیه. من هوش مصنوعی‌ام و جایگزین درمانگر یا خدمات اضطراری نیستم.');
         return ok();
       }
       if (command === '/test_snow') {
@@ -228,6 +297,11 @@ export class ChatSession {
       }
       if (!text) { await this.send(chat, 'فعلاً فقط پیام متنی رو می‌تونم بخونم 🌱'); return ok(); }
       if (text.length > 6000) { await this.send(chat, 'لطفاً پیامت رو به بخش‌های کمتر از ۶۰۰۰ کاراکتر تقسیم کن.'); return ok(); }
+      const mediaRequest = parseMediaRequest(text);
+      if (mediaRequest) {
+        await this.handleMedia(chat, mediaRequest, record);
+        return ok();
+      }
       const wantsPrices = command === '/prices' || isMarketQuestion(text);
       const wantsWeather = ['/city', '/weather', '/alerts'].includes(command) || isWeatherQuestion(text);
       if (wantsPrices || wantsWeather) {

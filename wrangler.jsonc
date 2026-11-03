@@ -10,11 +10,13 @@
   "durable_objects": {
     "bindings": [
       { "name": "CHATS", "class_name": "ChatSession" },
-      { "name": "MARKETS", "class_name": "MarketFeed" }
+      { "name": "MARKETS", "class_name": "MarketFeed" },
+      { "name": "MEDIA", "class_name": "MediaBudget" }
     ]
   },
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["ChatSession"] },
-    { "tag": "v2", "new_sqlite_classes": ["MarketFeed"] }
+    { "tag": "v2", "new_sqlite_classes": ["MarketFeed"] },
+    { "tag": "v3", "new_sqlite_classes": ["MediaBudget"] }
   ]
 }

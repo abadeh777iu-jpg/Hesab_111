@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createWorker, ChatSession, FOLLOWUP_DELAY, FOLLOWUP_TEXT, FOLLOWUP_NOTICE } from './cloudflare.mjs';
 import { START_GREETING } from './core.mjs';
+import { MediaBudgetHandler, nextMediaDay } from './media.mjs';
 
 function update(id = 1, text = 'سلام', user = 42) {
   return { update_id: id, message: { chat: { id: user, type: 'private' }, from: { id: user }, text } };
@@ -477,6 +478,156 @@ test('snow preview metadata gets a cleanup alarm independent of conversation his
   now += 30 * 60_000;
   await session.alarm();
   assert.equal(state.has('snowPreview'), false);
+  assert.equal(alarmAt(), undefined);
+  assert.equal(calls.length, 0);
+});
+
+function mediaSetup() {
+  const rig = setup();
+  const budgetState = new Map();
+  const budget = new MediaBudgetHandler({ storage: {
+    get: async key => structuredClone(budgetState.get(key)),
+    put: async (key, value) => budgetState.set(key, structuredClone(value)),
+    setAlarm: async () => {}, delete: async key => budgetState.delete(key),
+  } });
+  rig.env.MEDIA = {
+    idFromName: name => name,
+    get: () => ({ fetch: (url, options) => budget.fetch(new Request(url, options)) }),
+  };
+  rig.env.fetchImpl = async (url, options) => {
+    rig.calls.push({ url, body: options.body instanceof FormData ? options.body : JSON.parse(options.body) });
+    if (url.endsWith('/images')) return Response.json({ data: [{ b64_json: 'iVBORw0KGgoA', media_type: 'image/png' }] });
+    if (url.endsWith('/audio/speech')) {
+      if (rig.env.failSpeech) return Response.json({ error: 'private upstream detail' }, { status: 402 });
+      return new Response(Uint8Array.from([73, 68, 51, 0]), { headers: { 'Content-Type': 'audio/mpeg' } });
+    }
+    if (url.endsWith('/chat/completions')) return Response.json({ choices: [{ message: { content: 'با یه قدم کوچیک شروع کن 🌱' } }] });
+    return Response.json({ ok: true });
+  };
+  return { ...rig, budgetState };
+}
+
+test('explicit image request uploads one real file only to the requester, no surprise enrollment or duplicate charge', async () => {
+  const { env, state, calls, budgetState } = mediaSetup();
+  const worker = createWorker();
+  await Promise.all([worker.fetch(request(update(1, 'برام یه عکس کلبه برفی بساز')), env), worker.fetch(request(update(1, 'برام یه عکس کلبه برفی بساز')), env)]);
+  assert.equal(calls.filter(call => call.url.endsWith('/images')).length, 1);
+  const uploads = calls.filter(call => call.url.endsWith('/sendPhoto'));
+  assert.equal(uploads.length, 1);
+  assert.equal(uploads[0].body.get('chat_id'), '42');
+  assert.equal(uploads[0].body.get('photo').type, 'image/png');
+  assert.equal(state.has('weather'), false);
+  assert.equal(state.has('followup'), false);
+  assert.equal(state.get('mediaUsage').image, 1);
+  assert.equal(budgetState.get('budget').image, 1);
+  assert.deepEqual(state.get('session').messages, []); // no image/prompt persistence
+});
+
+test('voice question preserves readable response and history, then sends an AI-labeled voice note', async () => {
+  const { env, state, calls } = mediaSetup();
+  await createWorker().fetch(request(update(1, 'با ویس جواب بده، چطور کارمو شروع کنم؟')), env);
+  assert.equal(calls.filter(call => call.url.endsWith('/chat/completions')).length, 1);
+  assert.equal(calls.filter(call => call.url.endsWith('/audio/speech')).length, 1);
+  const voice = calls.find(call => call.url.endsWith('/sendVoice'));
+  assert.equal(voice.body.get('chat_id'), '42');
+  assert.ok(voice.body.get('caption').includes('صدای واقعی شخص امیر نیست'));
+  assert.equal(voice.body.get('voice').type, 'audio/mpeg');
+  assert.ok(calls.find(call => call.url.endsWith('/sendMessage')).body.text.includes('یه قدم کوچیک'));
+  assert.equal(state.get('session').messages.length, 2);
+  assert.equal(state.has('weather'), false);
+  assert.equal(state.has('followup'), false);
+});
+
+test('/voice reuses the last answer without another chat-model charge', async () => {
+  const { env, state, calls } = mediaSetup();
+  state.set('session', { expiresAt: Date.now() + 60_000, seen: [], messages: [{ role: 'assistant', content: 'یه قدم کوچیک بردار 🌱' }], lastAt: 0 });
+  await createWorker().fetch(request(update(1, '/voice')), env);
+  assert.equal(calls.filter(call => call.url.endsWith('/chat/completions')).length, 0);
+  assert.equal(calls.find(call => call.url.endsWith('/audio/speech')).body.input, 'یه قدم کوچیک بردار');
+  assert.equal(calls.filter(call => call.url.endsWith('/sendVoice')).length, 1);
+});
+
+test('empty/oversized prompts, disabled media, groups and unauthorized users spend no media budget', async () => {
+  const { env, calls, state, budgetState } = mediaSetup();
+  const worker = createWorker();
+  await worker.fetch(request(update(1, '/image')), env);
+  await worker.fetch(request(update(2, '/voice')), env);
+  await worker.fetch(request(update(3, '/image ' + 'a'.repeat(2001))), env);
+  await worker.fetch(request(update(4, '/image snow', 99)), env);
+  const group = update(5, '/image snow'); group.message.chat.type = 'group';
+  await worker.fetch(request(group), env);
+  env.MEDIA_ENABLED = 'false';
+  await worker.fetch(request(update(6, '/image snow')), env);
+  assert.equal(calls.filter(call => call.url.includes('openrouter')).length, 0);
+  assert.equal(state.has('mediaUsage'), false);
+  assert.equal(budgetState.size, 0);
+});
+
+test('personal daily limits and shared cooldown survive /reset, history expiry and object recreation', async t => {
+  let now = 1_800_000_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const { env, storage, calls, state } = mediaSetup();
+  const worker = createWorker();
+  await worker.fetch(request(update(1, '/voice شروع کار')), env);
+  await worker.fetch(request(update(2, '/image snow')), env);
+  assert.ok(calls.at(-1).body.text.includes('یک دقیقه'));
+  now += 60_000;
+  await worker.fetch(request(update(3, '/image snow')), env);
+  await worker.fetch(request(update(4, '/reset')), env);
+  now += 31 * 60_000;
+  const recreated = new ChatSession({ storage }, env);
+  await recreated.fetch(request(update(5, '/image snow')));
+  assert.ok(calls.at(-1).body.text.includes('سهمیهٔ امروزت'));
+  await recreated.fetch(request(update(6, '/voice دوباره شروع')));
+  now += 60_000;
+  await recreated.fetch(request(update(7, '/voice قدم بعدی')));
+  now += 60_000;
+  await recreated.fetch(request(update(8, '/voice بیشتر')));
+  assert.ok(calls.at(-1).body.text.includes('سهمیهٔ امروزت'));
+  assert.equal(calls.filter(call => call.url.endsWith('/images')).length, 1);
+  assert.equal(calls.filter(call => call.url.endsWith('/audio/speech')).length, 3);
+  assert.equal(state.get('mediaUsage').voice, 3);
+});
+
+test('failed speech keeps the text, consumes an attempt and never leaks raw errors or retries', async () => {
+  const { env, calls, state } = mediaSetup();
+  env.failSpeech = true;
+  const worker = createWorker();
+  await worker.fetch(request(update(1, '/voice شروع کار')), env);
+  await worker.fetch(request(update(1, '/voice شروع کار')), env);
+  assert.equal(calls.filter(call => call.url.endsWith('/audio/speech')).length, 1);
+  assert.equal(calls.filter(call => call.url.endsWith('/sendVoice')).length, 0);
+  const messages = calls.filter(call => call.url.endsWith('/sendMessage'));
+  assert.ok(messages[0].body.text.includes('یه قدم کوچیک'));
+  assert.ok(messages.at(-1).body.text.includes('اعتبار'));
+  assert.ok(!JSON.stringify(messages).includes('private upstream'));
+  assert.equal(state.get('mediaUsage').voice, 1);
+});
+
+test('shared exhausted or unavailable budget fails closed before any paid request', async () => {
+  for (const status of [429, 503]) {
+    const { env, calls, state } = mediaSetup();
+    env.MEDIA.get = () => ({ fetch: async () => new Response('not available', { status }) });
+    await createWorker().fetch(request(update(1, '/image snow')), env);
+    assert.equal(calls.filter(call => call.url.includes('openrouter')).length, 0);
+    assert.equal(state.has('mediaUsage'), false);
+    if (status === 429) assert.ok(calls.at(-1).body.text.includes('کل ربات'));
+  }
+});
+
+test('per-chat budget cleanup alarm survives history expiry and removes only its own data at midnight', async t => {
+  let now = 1_800_000_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const { env, session, state, calls, alarmAt } = mediaSetup();
+  await createWorker().fetch(request(update(1, '/image snow')), env);
+  calls.length = 0;
+  now += 31 * 60_000;
+  await session.alarm();
+  assert.equal(state.has('session'), false);
+  assert.equal(alarmAt(), nextMediaDay());
+  now = nextMediaDay();
+  await session.alarm();
+  assert.equal(state.has('mediaUsage'), false);
   assert.equal(alarmAt(), undefined);
   assert.equal(calls.length, 0);
 });

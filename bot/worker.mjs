@@ -1,6 +1,7 @@
 import { DurableObject } from 'cloudflare:workers';
 import worker, { ChatSession as SessionHandler } from './cloudflare.mjs';
 import { MarketFeedHandler } from './live-data.mjs';
+import { MediaBudgetHandler } from './media.mjs';
 
 // Keep runtime-only imports in this entrypoint, so the shared handler can also
 // be tested with Node's test runner without mocking Cloudflare built-ins.
@@ -19,6 +20,15 @@ export class MarketFeed extends DurableObject {
     this.handler = new MarketFeedHandler(ctx, env);
   }
   fetch(request) { return this.handler.fetch(request); }
+}
+
+export class MediaBudget extends DurableObject {
+  constructor(ctx, env) {
+    super(ctx, env);
+    this.handler = new MediaBudgetHandler(ctx);
+  }
+  fetch(request) { return this.handler.fetch(request); }
+  alarm() { return this.handler.alarm(); }
 }
 
 export default worker;
