@@ -20,7 +20,18 @@ export function mediaFailureMessage(error) {
   if (error?.code === 'ASSET_URL') return 'سرویس رسانه آدرس فایل خارج از مسیر مجاز برگردوند؛ برای امنیت فایل رو دریافت نکردم 🌱 تکرار خودکار انجام نمی‌شه.';
   if (error?.code === 'AUDIO_FORMAT') return 'سرویس فایل صوتی سازگار با ویس تلگرام نداد 🌱 خروجی صوتی یا WAV قابل‌تبدیل معتبر نبود. پاسخ متنی باقی مونده؛ تکرار خودکار نمی‌کنم.';
   if (error?.code === 'HTTP_401' || error?.code === 'HTTP_403') return 'کلید یا دسترسی سرویس رسانه پذیرفته نشد 🌱 مدیر باید تنظیمات همون سرویس رو بررسی کنه؛ کلید رو در چت نفرست.';
-  if (error?.code === 'HTTP_400' || error?.code === 'HTTP_422') return 'سرویس رسانه تنظیم مدل یا صدای درخواستی رو نپذیرفت 🌱 نام مدل و صدا باید در حساب Free.ai قابل‌استفاده باشه. کد امن: MEDIA_' + error.code;
+  const rejected = /^(HTTP_(?:400|422))_(MODEL|VOICE|LANGUAGE|FORMAT|INPUT)$/.exec(error?.code || '');
+  if (rejected) {
+    const reasons = {
+      MODEL: 'Free.ai خطای مدل رو اعلام کرده؛ مدل انتخابی باید در API همین حساب قابل‌استفاده باشه.',
+      VOICE: 'Free.ai خطای صدا رو اعلام کرده؛ شناسهٔ صدا باید در API همون مدل معتبر باشه.',
+      LANGUAGE: 'Free.ai خطای زبان رو اعلام کرده؛ پشتیبانی فارسی در مدل انتخابی باید بررسی بشه.',
+      FORMAT: 'Free.ai خطای فرمت خروجی رو اعلام کرده؛ فرمت مجاز همین مدل باید بررسی بشه.',
+      INPUT: 'Free.ai خطای ورودی رو اعلام کرده؛ ساختار درخواست باید با API همین سرویس سازگار بشه.',
+    };
+    return reasons[rejected[2]] + ' 🌱 تکرار خودکار نداریم. کد امن: MEDIA_' + error.code;
+  }
+  if (error?.code === 'HTTP_400' || error?.code === 'HTTP_422') return 'Free.ai درخواست رسانه رو نپذیرفت؛ از کد HTTP به‌تنهایی نمی‌شه گفت مشکل مدل، صدا یا فرمت بوده 🌱 تکرار خودکار نداریم. کد امن: MEDIA_' + error.code;
   if (error?.code === 'HTTP_402') return 'اعتبار سرویس برای ساخت عکس یا ویس کافی نیست؛ مدیر ربات باید اعتبار سرویس رسانه رو بررسی کنه 🌱';
   if (error?.code === 'HTTP_429') return 'سرویس ساخت عکس یا ویس فعلاً شلوغه؛ کمی بعد دوباره امتحان کن 🌱';
   return 'نتونستم عکس یا ویس رو بسازم یا تحویل بدم 🌱 ممکنه مدل، محدودیت محتوا یا اتصال سرویس علتش باشه. تکرار خودکار نمی‌کنم تا دوباره اعتبار مصرف نشه.';
@@ -139,6 +150,47 @@ export function validateMediaConfiguration(env, kind) {
     throw new MediaError('CONFIG');
   }
 }
+// Read only a small error body and emit a closed set of categories. Never
+// return/store the raw message, names, URLs, prompt, response body or credentials.
+export function classifyFreeAIRejection(status, data) {
+  const fallback = `HTTP_${status}`;
+  if (![400, 422].includes(status) || !data || typeof data !== 'object') return fallback;
+  const fields = new Set(['model', 'voice', 'language', 'format', 'response_format', 'text', 'input', 'prompt']);
+  const category = field => ({ model: 'MODEL', voice: 'VOICE', language: 'LANGUAGE', format: 'FORMAT', response_format: 'FORMAT', text: 'INPUT', input: 'INPUT', prompt: 'INPUT' })[field];
+  // FastAPI structured validation, e.g. loc: ['body', 'voice'], type: 'missing'.
+  if (Array.isArray(data.detail)) for (const item of data.detail.slice(0, 12)) {
+    const field = Array.isArray(item?.loc) ? item.loc.at(-1) : null;
+    if (fields.has(field) && ['missing', 'string_type', 'literal_error', 'enum', 'value_error'].includes(item?.type)) return `${fallback}_${category(field)}`;
+  }
+  const parts = [];
+  const collect = (node, depth) => {
+    if (depth > 3 || parts.length > 12) return;
+    if (typeof node === 'string') parts.push(node.slice(0, 1200));
+    else if (node && !Array.isArray(node) && typeof node === 'object') {
+      for (const key of ['error', 'detail', 'message', 'code']) collect(node[key], depth + 1);
+    }
+  };
+  collect(data, 0);
+  const text = parts.join(' ').toLowerCase().replace(/[_-]/g, ' ');
+  // Classify only explicit error phrases, not a mere mention of a field.
+  // Multiple different categories are ambiguous and retain the generic HTTP code.
+  const matches = [];
+  for (const field of ['model', 'voice', 'language', 'format', 'input']) {
+    const pattern = new RegExp(`(?:unsupported|unknown|invalid|missing)\\s+(?:tts\\s+)?${field}\\b|\\b${field}\\s+(?:is\\s+)?(?:not supported|not available|not found|invalid|required)`);
+    if (pattern.test(text)) matches.push(field.toUpperCase());
+  }
+  return matches.length === 1 ? `${fallback}_${matches[0]}` : fallback;
+}
+async function freeAIRejection(response) {
+  let code = `HTTP_${response.status}`;
+  if ([400, 422].includes(response.status)) {
+    try {
+      const data = JSON.parse(new TextDecoder().decode(await readBounded(response, 16 * 1024)));
+      code = classifyFreeAIRejection(response.status, data);
+    } catch { /* malformed, oversized or unreadable body: keep only HTTP code */ }
+  } else await response.body?.cancel();
+  return new MediaError(code);
+}
 async function freeAIJson(env, endpoint, payload, timeoutMs) {
   const response = await (env.fetchImpl || fetch)(`https://api.free.ai/v1/${endpoint}/`, {
     method: 'POST', redirect: 'manual',
@@ -146,7 +198,7 @@ async function freeAIJson(env, endpoint, payload, timeoutMs) {
     body: JSON.stringify(payload), signal: AbortSignal.timeout(timeoutMs),
   });
   if (!response.ok) {
-    await response.body?.cancel(); throw new MediaError(`HTTP_${response.status}`);
+    throw await freeAIRejection(response);
   }
   if (!response.headers.get('Content-Type')?.toLowerCase().includes('application/json')) {
     await response.body?.cancel(); throw new MediaError('DATA');

@@ -774,3 +774,25 @@ test('voice works with just the Free.ai key using default Persian configuration,
   assert.equal(state.has('followup'), false);
   assert.equal(state.has('weather'), false);
 });
+
+test('a rejected Free.ai voice shows only its safe diagnostic code and retains text, without retry or fallback', async () => {
+  const { env, calls, state } = freeAIMediaSetup();
+  const original = env.fetchImpl;
+  env.fetchImpl = async (url, options) => {
+    if (url.endsWith('/v1/tts/')) {
+      calls.push({ url, body: JSON.parse(options.body) });
+      return Response.json({ error: 'Unsupported language: private-transcript sk-free-secret' }, { status: 400 });
+    }
+    return original(url, options);
+  };
+  await createWorker().fetch(request(update(1, '/voice سلام')), env);
+  assert.equal(calls.filter(call => call.url.endsWith('/v1/tts/')).length, 1);
+  assert.equal(calls.filter(call => call.url.endsWith('/audio/speech')).length, 0);
+  assert.equal(calls.filter(call => call.url.endsWith('/sendVoice')).length, 0);
+  const messages = calls.filter(call => call.url.endsWith('/sendMessage')).map(call => call.body.text);
+  assert.ok(messages[0].includes('یه قدم کوچیک'));
+  assert.ok(messages.at(-1).includes('MEDIA_HTTP_400_LANGUAGE'));
+  assert.ok(!messages.join(' ').includes('private-transcript'));
+  assert.ok(!messages.join(' ').includes('sk-free-secret'));
+  assert.equal(state.get('mediaUsage').voice, 1);
+});

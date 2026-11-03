@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { makeWav } from './fixtures/audio.mjs';
 import {
   parseMediaRequest, generateImage, generateSpeech, uploadMedia, speechText,
-  MediaBudgetHandler, mediaFailureMessage, nextMediaDay,
+  MediaBudgetHandler, mediaFailureMessage, nextMediaDay, classifyFreeAIRejection,
 } from './media.mjs';
 
 const png = Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10, 0]);
@@ -285,4 +285,47 @@ test('Free.ai voice defaults to Persian Piper and converts returned WAV locally 
   assert.ok(file.bytes.length > 100);
   assert.equal(file.bytes[0], 255);
   assert.equal(file.bytes[1] & 224, 224);
+});
+
+test('Free.ai 400 is not blamed on voice without explicit evidence; only fixed diagnostic categories escape', () => {
+  const cases = [
+    [{ error: 'Unsupported voice: private-value sk-free-secret' }, 'HTTP_400_VOICE'],
+    [{ error: { message: 'Unknown TTS model: private-model' } }, 'HTTP_400_MODEL'],
+    [{ error: { error: 'Language is not supported' } }, 'HTTP_400_LANGUAGE'],
+    [{ error: { code: 'unsupported_format' } }, 'HTTP_400_FORMAT'],
+    [{ message: 'Invalid input' }, 'HTTP_400_INPUT'],
+    [{ error: 'Voice processing failed while checking model' }, 'HTTP_400'],
+    [{ error: 'Invalid voice or unknown model' }, 'HTTP_400'],
+    [{ error: 'https://example.invalid/sk-free-private body and prompt' }, 'HTTP_400'],
+  ];
+  for (const [body, expected] of cases) {
+    const code = classifyFreeAIRejection(400, body);
+    assert.equal(code, expected);
+    const text = mediaFailureMessage({ code });
+    assert.ok(!text.includes('private'));
+    assert.ok(!text.includes('sk-free-'));
+    assert.ok(!text.includes('https://'));
+    assert.ok(text.includes(`MEDIA_${expected}`));
+  }
+  assert.equal(classifyFreeAIRejection(422, { detail: [{ loc: ['body', 'voice'], type: 'missing', input: 'private' }] }), 'HTTP_422_VOICE');
+  assert.equal(classifyFreeAIRejection(422, { detail: [{ loc: ['body', 'private-field'], type: 'missing' }] }), 'HTTP_422');
+  assert.equal(classifyFreeAIRejection(403, { error: 'Unsupported voice' }), 'HTTP_403');
+});
+
+test('bounded Free.ai error-body inspection classifies rejection without retrying or retaining secrets', async () => {
+  let calls = 0;
+  const env = { FREEAI_API_KEY: 'free-key', fetchImpl: async () => {
+    calls++;
+    return Response.json({ error: { error: 'Unknown voice: sk-free-do-not-display', private_context: 'user transcript' } }, { status: 400 });
+  } };
+  await assert.rejects(generateSpeech(env, 'سلام'), error => {
+    assert.equal(error.code, 'HTTP_400_VOICE');
+    assert.equal(error.message, 'Media request failed');
+    assert.ok(!JSON.stringify(error).includes('sk-free-do-not-display'));
+    return true;
+  });
+  assert.equal(calls, 1);
+  for (const response of [new Response('bad json', { status: 400 }), new Response('x'.repeat(17 * 1024), { status: 400 }), new Response(null, { status: 400 })]) {
+    await assert.rejects(generateSpeech({ FREEAI_API_KEY: 'key', fetchImpl: async () => response }, 'سلام'), { code: 'HTTP_400' });
+  }
 });
