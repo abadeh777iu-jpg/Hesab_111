@@ -1,0 +1,55 @@
+{
+  "note": "Normalized manually checked subset of public catalog/endpoint metadata, not a raw API response. Format comes from the linked TTS guide.",
+  "checkedAt": "2026-11-03",
+  "catalogSource": "https://openrouter.ai/api/v1/models?output_modalities=speech",
+  "catalogEntry": {
+    "id": "google/gemini-3.8-flash-lite-tts",
+    "canonical_slug": "google/gemini-3.8-flash-lite-tts-20260922",
+    "supported_voices": [
+      "Zephyr",
+      "Puck",
+      "Charon",
+      "Kore",
+      "Fenrir",
+      "Leda",
+      "Orus",
+      "Aoede",
+      "Callirrhoe",
+      "Autonoe",
+      "Enceladus",
+      "Iapetus",
+      "Umbriel",
+      "Algieba",
+      "Despina",
+      "Erinome",
+      "Algenib",
+      "Rasalgethi",
+      "Laomedeia",
+      "Achernar",
+      "Alnilam",
+      "Schedar",
+      "Gacrux",
+      "Pulcherrima",
+      "Achird",
+      "Zubenelgenubi",
+      "Vindemiatrix",
+      "Sadachbia",
+      "Sadaltager",
+      "Sulafat"
+    ]
+  },
+  "endpointSource": "https://openrouter.ai/api/v1/models/google/gemini-3.8-flash-lite-tts-20260922/endpoints",
+  "observedProviderNames": [
+    "Google AI Studio",
+    "Google"
+  ],
+  "guideSource": "https://openrouter.ai/docs/guides/overview/multimodal/tts#google-gemini-tts",
+  "documentedGeminiResponseFormat": "pcm",
+  "oldExampleMetadataSource": "https://openrouter.ai/api/v1/models/openai/gpt-4o-mini-tts-2025-12-15/endpoints",
+  "oldExampleMetadataResponse": {
+    "error": {
+      "message": "Not Found",
+      "code": 404
+    }
+  }
+}

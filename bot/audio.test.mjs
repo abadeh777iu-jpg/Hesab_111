@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { wavToMp3 } from './audio.mjs';
+import { wavToMp3, pcm16ToMp3 } from './audio.mjs';
 
 import { makeWav } from './fixtures/audio.mjs';
 
@@ -50,4 +50,14 @@ test('malformed WAV, unsupported formats and excessive durations fail before uns
   const nan = makeWav({ float: true }); new DataView(nan.buffer).setFloat32(44, NaN, true); cases.push(nan);
   cases.push(makeWav({ sampleRate: 8000, seconds: 91 }));
   for (const bytes of cases) assert.throws(() => wavToMp3(bytes), /Unsupported WAV/);
+});
+
+
+test('Gemini raw PCM is really encoded to MP3; malformed and excessive data are rejected', () => {
+  const pcm = makeWav({ sampleRate: 24000 }).subarray(44);
+  assert.ok(countMp3Frames(pcm16ToMp3(pcm)) >= 2);
+  for (const bytes of [new Uint8Array(0), new Uint8Array(3), new Uint8Array(24000 * 2 * 91)]) {
+    assert.throws(() => pcm16ToMp3(bytes), /Unsupported PCM/);
+  }
+  assert.throws(() => pcm16ToMp3(pcm, 999999), /Unsupported PCM/);
 });

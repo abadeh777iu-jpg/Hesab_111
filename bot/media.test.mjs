@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { makeWav } from './fixtures/audio.mjs';
 import {
   parseMediaRequest, generateImage, generateSpeech, uploadMedia, speechText,
-  MediaBudgetHandler, mediaFailureMessage, nextMediaDay, classifyFreeAIRejection,
+  MediaBudgetHandler, mediaFailureMessage, nextMediaDay, classifyFreeAIRejection, openRouterSpeechConfiguration, DEFAULT_SPEECH_MODEL,
 } from './media.mjs';
 
 const png = Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10, 0]);
@@ -75,8 +75,8 @@ test('speech requests a short synthetic Persian preset as MP3, not a cloned voic
     assert.equal(options.redirect, 'manual');
     const body = JSON.parse(options.body);
     assert.equal(body.input, 'به نظرم یه قدم بردار');
-    assert.equal(body.voice, 'onyx');
-    assert.equal(body.response_format, 'mp3');
+    assert.equal(body.voice, 'Charon');
+    assert.equal(body.response_format, 'pcm');
     assert.ok(!body.input_references);
     assert.ok(body.instructions.includes('Persian'));
     return new Response(Uint8Array.from([73, 68, 51, 0]), { headers: { 'Content-Type': 'audio/mpeg' } });
@@ -337,10 +337,68 @@ test('voice defaults to OpenRouter independently of legacy image provider and us
     assert.equal(url, 'https://openrouter.ai/api/v1/audio/speech');
     assert.equal(options.headers.Authorization, 'Bearer chat-key');
     assert.ok(!JSON.stringify(options).includes('free-key'));
-    assert.equal(JSON.parse(options.body).voice, 'onyx');
+    assert.equal(JSON.parse(options.body).voice, 'Charon');
     return new Response(Uint8Array.from([73, 68, 51, 0]), { headers: { 'Content-Type': 'audio/mpeg' } });
   } }, 'سلام رفیق');
   assert.equal(calls, 1);
   assert.equal(file.type, 'audio/mpeg');
   await assert.rejects(generateSpeech({ FREEAI_API_KEY: 'free-key', fetchImpl: async () => { throw new Error('No fallback'); } }, 'سلام'), { code: 'OPENROUTER_KEY' });
+});
+
+test('OpenRouter voice default matches the checked live catalog and migrates only the retired example settings', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const snapshot = JSON.parse(await readFile(new URL('./fixtures/openrouter-speech.json', import.meta.url), 'utf8'));
+  const defaults = openRouterSpeechConfiguration({});
+  assert.equal(defaults.model, snapshot.catalogEntry.id);
+  assert.ok(snapshot.catalogEntry.supported_voices.includes(defaults.voice));
+  assert.equal(defaults.response_format, snapshot.documentedGeminiResponseFormat);
+  assert.deepEqual(openRouterSpeechConfiguration({ OPENROUTER_SPEECH_MODEL: 'openai/gpt-4o-mini-tts-2025-12-15', OPENROUTER_VOICE: 'onyx' }), defaults);
+  assert.equal(openRouterSpeechConfiguration({ OPENROUTER_VOICE: 'Kore' }).voice, 'Kore');
+  assert.deepEqual(openRouterSpeechConfiguration({ OPENROUTER_SPEECH_MODEL: 'custom/voice-model', OPENROUTER_VOICE: 'custom-voice' }), { model: 'custom/voice-model', voice: 'custom-voice', response_format: 'mp3' });
+  assert.throws(() => openRouterSpeechConfiguration({ OPENROUTER_SPEECH_MODEL: DEFAULT_SPEECH_MODEL, OPENROUTER_VOICE: 'onyx' }), { code: 'OR_VOICE_CONFIG' });
+});
+
+test('OpenRouter Gemini PCM is converted to MP3 locally with one generation call and no provider fallback', async () => {
+  let calls = 0;
+  const file = await generateSpeech({ OPENROUTER_API_KEY: 'key', fetchImpl: async (url, options) => {
+    calls++;
+    assert.equal(url, 'https://openrouter.ai/api/v1/audio/speech');
+    const body = JSON.parse(options.body);
+    assert.equal(body.model, DEFAULT_SPEECH_MODEL);
+    assert.equal(body.voice, 'Charon');
+    assert.equal(body.response_format, 'pcm');
+    assert.ok(body.instructions.includes('Persian'));
+    return new Response(makeWav({ sampleRate: 24000 }).subarray(44), { headers: { 'Content-Type': 'audio/pcm;rate=24000;channels=1' } });
+  } }, 'سلام رفیق');
+  assert.equal(calls, 1);
+  assert.equal(file.type, 'audio/mpeg');
+  assert.equal(file.bytes[0], 255);
+  assert.ok(file.bytes.length > 100);
+  for (const contentType of ['audio/pcm;rate=48000', 'audio/pcm;channels=2', 'audio/pcm; rate = "48000"', 'audio/pcm;bits=32', 'audio/pcm;rate=24000;rate=48000']) {
+    await assert.rejects(generateSpeech({ OPENROUTER_API_KEY: 'key', fetchImpl: async () => new Response(new Uint8Array(100), { headers: { 'Content-Type': contentType } }) }, 'سلام'), { code: 'AUDIO_FORMAT' });
+  }
+});
+
+test('OpenRouter 400 diagnostics identify the provider without exposing its raw error or retrying', async () => {
+  let calls = 0;
+  await assert.rejects(generateSpeech({ OPENROUTER_API_KEY: 'key', fetchImpl: async () => {
+    calls++;
+    return Response.json({ error: { message: 'Unknown model: private-value key-secret' } }, { status: 400 });
+  } }, 'سلام'), error => {
+    assert.equal(error.code, 'OR_HTTP_400_MODEL');
+    const text = mediaFailureMessage(error);
+    assert.ok(text.includes('OpenRouter'));
+    assert.ok(!text.includes('Free.ai'));
+    assert.ok(!text.includes('key-secret'));
+    return true;
+  });
+  assert.equal(calls, 1);
+});
+
+
+test('Gemini WAV-wrapped unary audio is not interpreted as raw PCM samples', async () => {
+  const wav = makeWav({ sampleRate: 24000 });
+  const { wavToMp3 } = await import('./audio.mjs');
+  const file = await generateSpeech({ OPENROUTER_API_KEY: 'key', fetchImpl: async () => new Response(wav, { headers: { 'Content-Type': 'audio/pcm' } }) }, 'سلام');
+  assert.deepEqual(file.bytes, wavToMp3(wav));
 });

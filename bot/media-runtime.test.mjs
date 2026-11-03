@@ -53,7 +53,7 @@ for (const provider of ['openrouter', 'freeai', 'mixed']) test(`Workers ${provid
         if (request.headers.get('Authorization') !== 'Bearer fake-key') return new Response('Bad auth', { status: 401 });
         const body = await request.json();
         if (url.pathname === '/api/v1/images' && body.n === 1) return Response.json({ data: [{ b64_json: 'iVBORw0KGgoA', media_type: 'image/png' }] });
-        if (url.pathname === '/api/v1/audio/speech' && body.response_format === 'mp3') return new Response(new Uint8Array([73, 68, 51, 0]), { headers: { 'Content-Type': 'audio/mpeg' } });
+        if (url.pathname === '/api/v1/audio/speech' && body.model === 'google/gemini-3.8-flash-lite-tts' && body.voice === 'Charon' && body.response_format === 'pcm') return new Response(Uint8Array.from(atob('${Buffer.from(makeWav({ sampleRate: 24000 }).subarray(44)).toString('base64')}'), ch => ch.charCodeAt(0)), { headers: { 'Content-Type': 'audio/pcm;rate=24000;channels=1' } });
       }
       if (url.hostname === 'api.telegram.org') {
         const form = await request.formData();
@@ -62,7 +62,7 @@ for (const provider of ['openrouter', 'freeai', 'mixed']) test(`Workers ${provid
         if (form.get('chat_id') !== '42' || !file || !form.get('caption') ||
           file.type !== (photo ? 'image/png' : 'audio/mpeg')) return Response.json({ ok: false });
         const bytes = new Uint8Array(await file.arrayBuffer());
-        if (photo ? bytes.length !== 9 : '${provider}' === 'freeai' ? bytes.length < 100 || bytes[0] !== 255 : bytes.length !== 4) return Response.json({ ok: false });
+        if (photo ? bytes.length !== 9 : bytes.length < 100 || bytes[0] !== 255) return Response.json({ ok: false });
         return Response.json({ ok: true });
       }
       return new Response('Unexpected request', { status: 400 });

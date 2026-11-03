@@ -857,3 +857,15 @@ test('OpenRouter voice rejection never retries or falls back to Free.ai', async 
   assert.equal(calls.filter(call => call.url.endsWith('/sendVoice')).length, 0);
   assert.ok(calls.at(-1).body.text.includes('اعتبار'));
 });
+
+test('incompatible Gemini voice override is rejected before any chat charge or media budget reservation', async () => {
+  const { env, calls, state, budgetState } = freeAIMediaSetup();
+  delete env.MEDIA_VOICE_PROVIDER;
+  env.OPENROUTER_SPEECH_MODEL = 'google/gemini-3.8-flash-lite-tts';
+  env.OPENROUTER_VOICE = 'not-a-valid-gemini-voice';
+  await createWorker().fetch(request(update(1, '/voice سلام')), env);
+  assert.equal(calls.filter(call => call.url.includes('openrouter.ai') || call.url.includes('api.free.ai')).length, 0);
+  assert.equal(state.has('mediaUsage'), false);
+  assert.equal(budgetState.size, 0);
+  assert.ok(calls.at(-1).body.text.includes('سازگار نیست'));
+});

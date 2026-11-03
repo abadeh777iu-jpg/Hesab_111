@@ -69,3 +69,19 @@ export function wavToMp3(bytes) {
   for (const chunk of chunks) { result.set(chunk, at); at += chunk.length; }
   return result;
 }
+
+// OpenRouter's Gemini speech endpoint returns signed 16-bit little-endian PCM,
+// 24 kHz mono. Give it a genuine WAV header before using the bounded encoder.
+export function pcm16ToMp3(bytes, sampleRate = 24000) {
+  if (!(bytes instanceof Uint8Array) || !bytes.length || bytes.length % 2 || bytes.length > 5 * 1024 * 1024 - 44 ||
+      ![8000, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000].includes(sampleRate) || bytes.length / (2 * sampleRate) > 90) throw new Error('Unsupported PCM');
+  const wav = new Uint8Array(44 + bytes.length);
+  const view = new DataView(wav.buffer);
+  const tag = (at, value) => wav.set(new TextEncoder().encode(value), at);
+  tag(0, 'RIFF'); view.setUint32(4, wav.length - 8, true); tag(8, 'WAVE'); tag(12, 'fmt ');
+  view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true); view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true); view.setUint16(34, 16, true); tag(36, 'data');
+  view.setUint32(40, bytes.length, true); wav.set(bytes, 44);
+  return wavToMp3(wav);
+}
