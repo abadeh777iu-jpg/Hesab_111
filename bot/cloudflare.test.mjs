@@ -484,6 +484,7 @@ test('snow preview metadata gets a cleanup alarm independent of conversation his
 
 function mediaSetup() {
   const rig = setup();
+  rig.env.MEDIA_PROVIDER = 'openrouter';
   const budgetState = new Map();
   const budget = new MediaBudgetHandler({ storage: {
     get: async key => structuredClone(budgetState.get(key)),
@@ -630,4 +631,91 @@ test('per-chat budget cleanup alarm survives history expiry and removes only its
   assert.equal(state.has('mediaUsage'), false);
   assert.equal(alarmAt(), undefined);
   assert.equal(calls.length, 0);
+});
+
+function freeAIMediaSetup() {
+  const rig = mediaSetup();
+  delete rig.env.MEDIA_PROVIDER; // new default, even with an OpenRouter chat key
+  rig.env.FREEAI_API_KEY = 'freeai-secret';
+  rig.env.FREEAI_TTS_MODEL = 'configured-persian-model';
+  rig.env.FREEAI_TTS_VOICE = 'configured-persian-voice';
+  const original = rig.env.fetchImpl;
+  rig.env.fetchImpl = async (url, options) => {
+    if (new URL(url).hostname !== 'api.free.ai') return original(url, options);
+    rig.calls.push({ url, body: options.body ? JSON.parse(options.body) : null, headers: options.headers });
+    if (options.method === 'POST') {
+      assert.equal(options.headers.Authorization, 'Bearer freeai-secret');
+      if (url.endsWith('/v1/image/generate/')) return Response.json({ image_url: '/static/outputs/snow.png' });
+      if (url.endsWith('/v1/tts/')) return Response.json({ audio_url: '/static/outputs/voice.mp3' });
+      throw new Error('Unexpected Free.ai endpoint');
+    }
+    assert.equal(options.headers.Authorization, undefined);
+    return url.endsWith('.png')
+      ? new Response(Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10, 0]), { headers: { 'Content-Type': 'image/png' } })
+      : new Response(Uint8Array.from([73, 68, 51, 0]), { headers: { 'Content-Type': 'audio/mpeg' } });
+  };
+  return rig;
+}
+
+test('Free.ai default isolates image/speech from OpenRouter chat and still uses shared media budgets', async t => {
+  let now = 1_800_000_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const { env, calls, state, budgetState } = freeAIMediaSetup();
+  const worker = createWorker();
+  await worker.fetch(request(update(1, '/image کلبه برفی')), env);
+  now += 60_000;
+  await worker.fetch(request(update(2, '/voice چطور شروع کنم؟')), env);
+  const router = calls.filter(call => call.url.includes('openrouter.ai'));
+  assert.equal(router.length, 1);
+  assert.ok(router[0].url.endsWith('/chat/completions'));
+  const free = calls.filter(call => call.url.includes('api.free.ai'));
+  assert.equal(free.length, 4); // two generations + two bounded public-file downloads
+  assert.equal(free.filter(call => call.headers.Authorization).length, 2);
+  assert.equal(calls.filter(call => call.url.endsWith('/sendPhoto')).length, 1);
+  assert.equal(calls.filter(call => call.url.endsWith('/sendVoice')).length, 1);
+  assert.equal(state.get('mediaUsage').image, 1);
+  assert.equal(state.get('mediaUsage').voice, 1);
+  assert.equal(budgetState.get('budget').image, 1);
+  assert.equal(budgetState.get('budget').voice, 1);
+  assert.equal(state.has('weather'), false);
+  assert.equal(state.has('followup'), false);
+});
+
+test('missing Free.ai key or Persian voice setup never reserves budget or falls back to OpenRouter', async () => {
+  for (const missing of ['FREEAI_API_KEY', 'FREEAI_TTS_MODEL', 'FREEAI_TTS_VOICE']) {
+    const { env, calls, state, budgetState } = freeAIMediaSetup();
+    delete env[missing];
+    await createWorker().fetch(request(update(1, missing === 'FREEAI_API_KEY' ? '/image snow' : '/voice سلام')), env);
+    assert.equal(calls.filter(call => call.url.includes('openrouter') || call.url.includes('api.free.ai')).length, 0);
+    assert.equal(state.has('mediaUsage'), false);
+    assert.equal(budgetState.size, 0);
+    assert.ok(calls.at(-1).body.text.includes(missing === 'FREEAI_API_KEY' ? 'FREEAI_API_KEY' : 'صدای فارسی'));
+  }
+});
+
+test('normal text still calls only OpenRouter, even when Free.ai key is absent', async () => {
+  const { env, calls } = freeAIMediaSetup();
+  delete env.FREEAI_API_KEY;
+  await createWorker().fetch(request(update(1, 'حالم خوب نیست')), env);
+  assert.equal(calls.filter(call => call.url.includes('openrouter.ai')).length, 1);
+  assert.equal(calls.filter(call => call.url.includes('api.free.ai')).length, 0);
+});
+
+test('Free.ai failure or unsafe returned asset retains budget claim and never retries another provider', async () => {
+  const { env, calls, state } = freeAIMediaSetup();
+  const original = env.fetchImpl;
+  env.fetchImpl = async (url, options) => {
+    if (url.endsWith('/v1/image/generate/')) {
+      calls.push({ url, body: JSON.parse(options.body) });
+      return Response.json({ image_url: 'http://127.0.0.1/secrets.png' });
+    }
+    return original(url, options);
+  };
+  const worker = createWorker();
+  await worker.fetch(request(update(1, '/image snow')), env);
+  await worker.fetch(request(update(1, '/image snow')), env);
+  assert.equal(calls.filter(call => call.url.includes('api.free.ai')).length, 1);
+  assert.equal(calls.filter(call => call.url.includes('127.0.0.1') || call.url.includes('openrouter.ai')).length, 0);
+  assert.equal(state.get('mediaUsage').image, 1);
+  assert.ok(calls.at(-1).body.text.includes('مسیر مجاز'));
 });
