@@ -966,3 +966,26 @@ test('calendar source outage still returns a current Tehran date instead of aski
   assert.ok(calls.at(-1).body.text.includes('حدس نمی‌زنم'));
   assert.ok(!calls.at(-1).body.text.includes('private upstream error'));
 });
+
+test('creator contact is answered locally without paid requests, shared feeds or media budget usage', async () => {
+  for (const text of ['/creator', 'سازنده‌ات کیه؟', 'کی تورو ساخته؟', 'آیدی سازنده رو بده']) {
+    const { env, calls, state } = setup();
+    await createWorker().fetch(request(update(1, text)), env);
+    assert.equal(calls.filter(call => call.url.includes('openrouter.ai')).length, 0);
+    assert.ok(calls.at(-1).body.text.includes('@LC_amir1'));
+    assert.ok(calls.at(-1).body.text.includes('پیام زندهٔ سازنده نیست'));
+    assert.ok(state.get('session').messages.length <= 30);
+    assert.equal(state.has('mediaUsage'), false);
+    assert.equal(state.has('followup'), false);
+  }
+});
+
+test('about and help expose creator contact and command without changing the short start greeting', async () => {
+  const { env, calls } = setup();
+  const worker = createWorker();
+  await worker.fetch(request(update(1, '/about')), env);
+  assert.ok(calls.at(-1).body.text.includes('@LC_amir1'));
+  await worker.fetch(request(update(2, '/help')), env);
+  assert.ok(calls.at(-1).body.text.includes('/creator'));
+  assert.equal(calls.filter(call => call.url.includes('openrouter.ai')).length, 0);
+});

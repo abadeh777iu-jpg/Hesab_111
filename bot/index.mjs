@@ -1,3 +1,4 @@
+import { CREATOR_REPLY, isCreatorQuestion } from './creator.mjs';
 import { complete, ConversationStore, DISCLOSURE, PRIVACY, splitMessage, START_GREETING } from './core.mjs';
 import { formatReply } from './format.mjs';
 
@@ -73,12 +74,13 @@ async function handle(message) {
     await send(chat, 'احوال‌پرسی زمان‌بندی‌شده فقط در نسخهٔ Cloudflare فعاله؛ نسخهٔ محلی پیگیری خودکار نداره.');
     return;
   }
-  if (command === '/about') { await send(chat, DISCLOSURE); return; }
+  if (command === '/about') { await send(chat, `${DISCLOSURE}\n\n${CREATOR_REPLY}`); return; }
   if (command === '/privacy') { await send(chat, PRIVACY); return; }
   if (command === '/help') {
-    await send(chat, 'برای گفتگو یک پیام متنی بفرست.\n/start سلام و شروع دوباره\n/about دربارهٔ امیر\n/reset پاک‌کردن حافظهٔ گفتگو\n/privacy حریم خصوصی\n\nاین ربات جایگزین درمانگر یا خدمات اضطراری نیست.');
+    await send(chat, 'برای گفتگو یک پیام متنی بفرست.\n/start سلام و شروع دوباره\n/about دربارهٔ امیر\n/creator ارتباط با سازنده\n/reset پاک‌کردن حافظهٔ گفتگو\n/privacy حریم خصوصی\n\nاین ربات جایگزین درمانگر یا خدمات اضطراری نیست.');
     return;
   }
+  if (isCreatorQuestion(text)) { await send(chat, CREATOR_REPLY); return; }
   if (!text) { await send(chat, 'فعلاً فقط پیام متنی رو می‌تونم بخونم 🌱'); return; }
   if (text.length > 6000) { await send(chat, 'می‌شه پیامت رو در چند بخش کوتاه‌تر بفرستی؟ هر بخش حداکثر ۶۰۰۰ کاراکتر.'); return; }
   if (Date.now() - (cooldowns.get(id) || 0) < 4000) {
