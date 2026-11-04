@@ -1,3 +1,4 @@
+import { WEBHOOK_CONNECTIONS } from './load-control.mjs';
 // Run locally with --env-file=.env.bot. Never put tokens in command arguments.
 const token = process.env.TELEGRAM_BOT_TOKEN;
 const secret = process.env.TELEGRAM_WEBHOOK_SECRET;
@@ -26,7 +27,7 @@ try {
     url: new URL('/webhook', base).href,
     secret_token: secret,
     allowed_updates: ['message', 'callback_query'],
-    max_connections: 1,
+    max_connections: WEBHOOK_CONNECTIONS,
     drop_pending_updates: false,
   });
   const info = await call('getWebhookInfo', {});

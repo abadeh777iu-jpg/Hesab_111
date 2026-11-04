@@ -1,3 +1,4 @@
+import { CapacityHandler } from './load-control.mjs';
 import { InstagramFeedHandler } from './instagram.mjs';
 import { DurableObject } from 'cloudflare:workers';
 import worker, { ChatSession as SessionHandler } from './cloudflare.mjs';
@@ -24,10 +25,12 @@ export class MarketFeed extends DurableObject {
     this.news = new NewsFeedHandler(ctx, env);
     this.calendar = new CalendarFeedHandler(ctx, env);
     this.instagram = new InstagramFeedHandler(ctx, env);
+    this.capacity = new CapacityHandler(ctx);
   }
   fetch(request) {
     const path = new URL(request.url).pathname;
-    if (path === '/ig-resolve' || path === '/ig-recognize') return this.instagram.fetch(request);
+    if (path === '/capacity') return this.capacity.fetch(request);
+    if (['/ig-resolve', '/ig-recognize', '/ig-file-get', '/ig-file-put'].includes(path)) return this.instagram.fetch(request);
     if (path === '/calendar') return this.calendar.fetch();
     return path === '/news' ? this.news.fetch() : this.handler.fetch(request);
   }

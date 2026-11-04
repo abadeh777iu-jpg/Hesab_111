@@ -20,7 +20,7 @@ function setup() {
   };
   const calls = [];
   const env = {
-    TELEGRAM_BOT_TOKEN: 'test-token', TELEGRAM_WEBHOOK_SECRET: 'test-secret', JOIN_REQUIRED: 'false',
+    TELEGRAM_BOT_TOKEN: 'test-token', TELEGRAM_WEBHOOK_SECRET: 'test-secret', JOIN_REQUIRED: 'false', BOT_ASYNC_UPDATES: 'false',
     OPENROUTER_API_KEY: 'test-key', OPENROUTER_MODEL: 'test/model', TELEGRAM_ALLOWED_USER_IDS: '42',
     fetchImpl: async (url, options) => {
       calls.push({ url, body: JSON.parse(options.body) });
@@ -276,14 +276,16 @@ test('/about and /privacy retain identity and data disclosures on demand', async
   const { env, calls } = setup();
   const worker = createWorker();
   await worker.fetch(request(update(1, '/about')), env);
-  assert.equal(calls.length, 1);
+  const aboutCount = calls.length; assert.ok(aboutCount >= 1 && aboutCount <= 2);
   assert.ok(calls[0].body.text.includes('هوش مصنوعی'));
   assert.ok(calls[0].body.text.includes('پاسخ زندهٔ شخص امیر نیست'));
   await worker.fetch(request(update(2, '/privacy')), env);
-  assert.equal(calls.length, 2);
-  assert.ok(calls[1].body.text.includes('۳۰ پیام'));
-  assert.ok(calls[1].body.text.includes('OpenRouter'));
-  assert.ok(calls[1].body.text.includes('/stop'));
+  const privacy = calls.slice(aboutCount).map(c => c.body.text).join('');
+  assert.ok(privacy.includes('۳۰ پیام'));
+  assert.ok(privacy.includes('OpenRouter'));
+  assert.ok(privacy.includes('/stop'));
+  assert.ok(privacy.includes('۱۰ دقیقه'));
+  assert.ok(calls.every(c => c.url.endsWith('/sendMessage') && c.body.text.length <= 4000));
 });
 
 test('text after /start does not trigger another greeting or explanation', async () => {
@@ -972,7 +974,7 @@ test('creator contact is answered locally without paid requests, shared feeds or
     const { env, calls, state } = setup();
     await createWorker().fetch(request(update(1, text)), env);
     assert.equal(calls.filter(call => call.url.includes('openrouter.ai')).length, 0);
-    assert.ok(calls.at(-1).body.text.includes('@LC_amir1'));
+    assert.ok(calls.some(c => c.body.text.includes('@LC_amir1')));
     assert.ok(calls.at(-1).body.text.includes('پیام زندهٔ سازنده نیست'));
     assert.ok(state.get('session').messages.length <= 30);
     assert.equal(state.has('mediaUsage'), false);
@@ -984,7 +986,7 @@ test('about and help expose creator contact and command without changing the sho
   const { env, calls } = setup();
   const worker = createWorker();
   await worker.fetch(request(update(1, '/about')), env);
-  assert.ok(calls.at(-1).body.text.includes('@LC_amir1'));
+  assert.ok(calls.some(c => c.body.text.includes('@LC_amir1')));
   await worker.fetch(request(update(2, '/help')), env);
   assert.ok(calls.at(-1).body.text.includes('/creator'));
   assert.equal(calls.filter(call => call.url.includes('openrouter.ai')).length, 0);
@@ -1221,4 +1223,148 @@ test('Instagram failures consume only the independent attempt budget and hide pr
   assert.equal(f.calls.filter(c => c.url.includes('openrouter') || c.url.endsWith('/sendVideo')).length, 0);
   assert.ok(!f.calls.at(-1).body.text.includes('private-token'));
   assert.equal(f.state.has('mediaUsage'), false);
+});
+
+async function enableAsync(f) {
+  const { CapacityHandler } = await import('./load-control.mjs');
+  delete f.env.BOT_ASYNC_UPDATES;
+  const state = new Map();
+  const capacity = new CapacityHandler({ storage: { get: async k => structuredClone(state.get(k)), put: async (k, v) => state.set(k, structuredClone(v)) } });
+  f.capacityState = state;
+  f.env.MARKETS = { idFromName: name => { assert.equal(name, 'bot-capacity'); return name; }, get: () => ({ fetch: (url, options) => capacity.fetch(new Request(url, options)) }) };
+  return f;
+}
+
+test('default webhook acknowledges a durable admission before any model call and processes later via alarm', async t => {
+  let now = Date.now(); t.mock.method(Date, 'now', () => now);
+  const f = await enableAsync(setup()); const worker = createWorker();
+  assert.equal((await worker.fetch(request(update(1, 'سلام')), f.env)).status, 200);
+  assert.equal(f.calls.length, 0); assert.equal(f.state.get('inbox').pending.length, 1);
+  assert.equal(f.state.has('session'), false);
+  now += 200; await f.session.alarm();
+  assert.equal(f.calls.filter(c => c.url.includes('openrouter.ai')).length, 1);
+  assert.equal(f.state.get('inbox').pending.length, 0); assert.equal(f.state.get('inbox').active, null);
+  assert.equal(f.capacityState.get('workTickets').length, 0);
+  await worker.fetch(request(update(1, 'سلام')), f.env);
+  assert.equal(f.state.get('inbox').pending.length, 0);
+});
+
+test('new ingress remains responsive while an earlier model call is waiting, with no concurrent same-chat history writes', async t => {
+  let now = Date.now(); t.mock.method(Date, 'now', () => now);
+  const f = await enableAsync(setup()); const worker = createWorker(); const original = f.env.fetchImpl;
+  let started, release;
+  const modelStarted = new Promise(resolve => { started = resolve; });
+  const modelGate = new Promise(resolve => { release = resolve; });
+  f.env.fetchImpl = async (url, options) => { if (url.includes('openrouter.ai')) { started(); await modelGate; } return original(url, options); };
+  await worker.fetch(request(update(1, 'پیام اول')), f.env);
+  now += 200; const processing = f.session.alarm(); await modelStarted;
+  assert.equal((await worker.fetch(request(update(2, 'پیام دوم')), f.env)).status, 200);
+  assert.equal(f.state.get('inbox').pending.length, 1);
+  assert.equal(f.state.get('inbox').active.update.update_id, 1);
+  release(); await processing;
+  assert.equal(f.state.get('session').messages.length, 2);
+  now += 5000; await f.session.alarm();
+  const calls = f.calls.filter(c => c.url.includes('openrouter.ai'));
+  assert.equal(calls.length, 2); assert.equal(calls[1].body.messages.at(-1).content, 'پیام دوم');
+  assert.ok(calls[1].body.messages.some(m => m.content === 'پیام اول'));
+});
+
+test('pending updates survive ChatSession recreation and revoked allowlist entries are not processed', async t => {
+  let now = Date.now(); t.mock.method(Date, 'now', () => now);
+  const f = await enableAsync(setup()); await createWorker().fetch(request(update(1, 'سلام')), f.env);
+  const recreated = new ChatSession({ storage: f.storage }, f.env);
+  now += 200; await recreated.alarm();
+  assert.equal(f.calls.filter(c => c.url.includes('openrouter.ai')).length, 1);
+  await createWorker().fetch(request(update(2, 'لغوشده')), f.env);
+  f.env.TELEGRAM_ALLOWED_USER_IDS = '99'; now += 5000; await recreated.alarm();
+  assert.equal(f.calls.filter(c => c.url.includes('openrouter.ai')).length, 1);
+  assert.equal(f.state.get('inbox').pending.length, 0);
+});
+
+test('full queues return an explicit bounded busy notice, reset cancels pending text and releases admission tickets', async () => {
+  const f = await enableAsync(setup()); const worker = createWorker();
+  await Promise.all(Array.from({ length: 12 }, (_, i) => worker.fetch(request(update(i + 1, 'queued-' + i)), f.env)));
+  assert.equal(f.state.get('inbox').pending.length, 5);
+  assert.equal(f.calls.filter(c => c.url.endsWith('/sendMessage')).length, 1);
+  assert.ok(f.calls.at(-1).body.text.includes('پذیرفته نشد'));
+  await worker.fetch(request(update(13, '/reset')), f.env);
+  assert.equal(f.state.get('inbox').pending.length, 1);
+  assert.equal(f.state.get('inbox').pending[0].update.message.text, '/reset');
+  assert.equal(f.capacityState.get('workTickets').length, 1);
+  assert.equal(f.calls.filter(c => c.url.includes('openrouter.ai')).length, 0);
+});
+
+test('expired queue entries are removed with an honest notice instead of late paid generation', async t => {
+  let now = Date.now(); t.mock.method(Date, 'now', () => now);
+  const f = await enableAsync(setup()); await createWorker().fetch(request(update(1, 'سلام')), f.env);
+  now += 11 * 60000; await f.session.alarm();
+  assert.equal(f.calls.filter(c => c.url.includes('openrouter.ai')).length, 0);
+  assert.ok(f.calls.at(-1).body.text.includes('پردازش نشد'));
+  assert.equal(f.state.get('inbox').pending.length, 0);
+});
+
+test('crash recovery never repeats a provider call already reserved in persistent session history', async t => {
+  let now = Date.now(); t.mock.method(Date, 'now', () => now);
+  const f = await enableAsync(setup()); await createWorker().fetch(request(update(1, 'سلام')), f.env);
+  now += 200; await f.session.inbox.claim('u1');
+  f.state.set('session', { seen: [1], messages: [], expiresAt: now + 1800000, lastAt: now, introduced: true });
+  now += 4 * 60000 + 1;
+  await new ChatSession({ storage: f.storage }, f.env).alarm();
+  assert.equal(f.calls.filter(c => c.url.includes('openrouter.ai')).length, 0);
+  assert.equal(f.state.get('inbox').active, null);
+});
+
+test('capacity outages leave work durably queued with backoff; an admission outage is retriable rather than falsely acknowledged', async t => {
+  let now = Date.now(); t.mock.method(Date, 'now', () => now);
+  const f = await enableAsync(setup()); const worker = createWorker();
+  const original = f.env.MARKETS.get;
+  f.env.MARKETS.get = () => ({ fetch: async () => { throw new Error('private-error'); } });
+  assert.equal((await worker.fetch(request(update(1)), f.env)).status, 503);
+  assert.equal(f.state.get('inbox'), undefined); assert.equal(f.calls.length, 0);
+  f.env.MARKETS.get = original;
+  assert.equal((await worker.fetch(request(update(1)), f.env)).status, 200);
+  f.env.MARKETS.get = () => ({ fetch: async () => { throw new Error('private-error'); } });
+  now += 200; await f.session.alarm();
+  assert.equal(f.state.get('inbox').pending.length, 1); assert.ok(f.alarmAt() > now);
+  assert.equal(f.calls.length, 0);
+  f.env.MARKETS.get = original; now += 31000; await f.session.alarm();
+  assert.equal(f.calls.filter(c => c.url.includes('openrouter.ai')).length, 1);
+});
+
+test('a transient reservation-write failure recovers its durable active job without losing admission or repeating generation', async t => {
+  let now = Date.now(); t.mock.method(Date, 'now', () => now);
+  const f = await enableAsync(setup()); await createWorker().fetch(request(update(1)), f.env);
+  const put = f.storage.put; let failOnce = true;
+  f.storage.put = async (key, value) => { if (key === 'session' && failOnce) { failOnce = false; throw new Error('storage temporarily unavailable'); } return put(key, value); };
+  now += 200; await f.session.alarm();
+  assert.equal(f.calls.length, 0); assert.equal(f.state.get('inbox').active.id, 'u1');
+  assert.equal(f.capacityState.get('workTickets').length, 1);
+  now += 6000; await f.session.alarm();
+  assert.equal(f.calls.filter(c => c.url.includes('openrouter.ai')).length, 1);
+  assert.equal(f.state.get('inbox').active, null);
+});
+
+test('quota cleanup deadlines cannot overwrite an earlier durable inbox alarm', async t => {
+  const now = Date.now(); t.mock.method(Date, 'now', () => now);
+  const f = await enableAsync(setup()); await createWorker().fetch(request(update(1)), f.env);
+  await f.session.reserveInstagram('video');
+  assert.equal(f.alarmAt(), now + 100); assert.equal(f.state.get('instagramUsage').video, 1);
+});
+
+test('automatic weather respects the same four work leases and backs off without consuming a model call', async t => {
+  const now = Date.now(); t.mock.method(Date, 'now', () => now);
+  const f = await enableAsync(setup());
+  for (let i = 1; i <= 4; i++) { await f.session.capacity({ op: 'admit', id: 'u' + i }); await f.session.capacity({ op: 'start', id: 'u' + i }); }
+  f.state.set('weather', { alertsEnabled: true, nextCheckAt: now - 1, chatId: 42, city: { name: 'آباده' } });
+  await f.session.alarm();
+  assert.equal(f.calls.length, 0); assert.ok(f.state.get('weather').nextCheckAt >= now + 60000);
+  assert.equal(f.state.get('weather').alertsEnabled, true); assert.equal(f.capacityState.get('workTickets').length, 4);
+});
+
+test('switching to legacy ingress does not strand already accepted durable jobs in an alarm loop', async t => {
+  let now = Date.now(); t.mock.method(Date, 'now', () => now);
+  const f = await enableAsync(setup()); await createWorker().fetch(request(update(1)), f.env);
+  f.env.BOT_ASYNC_UPDATES = 'false'; now += 200; await f.session.alarm();
+  assert.equal(f.state.get('inbox').pending.length, 0);
+  assert.equal(f.calls.filter(c => c.url.includes('openrouter.ai')).length, 1);
 });

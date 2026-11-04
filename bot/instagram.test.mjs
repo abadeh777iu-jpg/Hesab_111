@@ -109,3 +109,31 @@ test('failed calls count against persistent limits; global cooldown and UTC rese
   now += 60000; assert.equal((await (await handler.fetch(request())).json()).code, 'LIMIT'); assert.equal(calls, 10);
   now = igDayEnd(now); await handler.fetch(request()); assert.equal(calls, 11); assert.equal(state.get('priceAttempts'), 3);
 });
+
+test('Telegram video file_id reuse never passes a remote URL or redownloads video bytes', async () => {
+  let calls = 0;
+  const env = { TELEGRAM_BOT_TOKEN: 'fake', fetchImpl: async (url, options) => {
+    calls++; assert.ok(url.endsWith('/sendVideo'));
+    assert.equal(options.body.get('video'), 'previously-uploaded-id');
+    return Response.json({ ok: true, result: { message_id: 456, video: { file_id: 'previously-uploaded-id' } } });
+  } };
+  const result = await uploadInstagramVideo(env, 43, 'previously-uploaded-id', 'a'.repeat(32), original, true);
+  assert.deepEqual(result, { messageId: 456, fileId: 'previously-uploaded-id' });
+  await assert.rejects(uploadInstagramVideo(env, 43, 'https://evil.test/private.mp4', 'a'.repeat(32), original));
+  assert.equal(calls, 1);
+});
+
+test('shared Telegram file metadata is capped at ten, expires after five minutes and does not consume provider budgets', async t => {
+  let now = Date.now(); t.mock.method(Date, 'now', () => now);
+  const { storage, state } = memory();
+  const handler = new InstagramFeedHandler({ storage }, { fetchImpl: () => { throw new Error('No source call allowed'); } });
+  const call = async (path, url, fileId) => (await handler.fetch(new Request('https://internal/ig-file-' + path, { method: 'POST', body: JSON.stringify({ url, fileId }) }))).json();
+  for (let i = 0; i < 20; i++) await call('put', 'https://www.instagram.com/reel/ABCDE' + i + '/', 'file-for-video-' + i);
+  assert.equal(state.get('igTelegramFiles').length, 10); assert.equal(state.has('igBudget'), false);
+  const url = 'https://www.instagram.com/reel/ABCDE19/';
+  assert.equal((await call('get', url)).value, 'file-for-video-19');
+  await call('put', url, null); assert.equal((await call('get', url)).value, null);
+  await call('put', url, 'file-for-video-19'); now += 5 * 60000;
+  assert.equal((await call('get', url)).value, null);
+  assert.equal((await call('put', url, 'https://evil.test/video.mp4')).ok, false);
+});

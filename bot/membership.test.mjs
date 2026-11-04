@@ -61,11 +61,23 @@ test('callback setup never changes unrelated webhooks or re-registers one alread
     let writes = 0;
     const result = await enableMembershipCallbacks(async method => {
       if (method === 'setWebhook') writes++;
-      return { url, allowed_updates: updates };
+      return { url, allowed_updates: updates, max_connections: 4 };
     }, 'https://bot.test/webhook', 'fake-secret');
     assert.equal(result, expected); assert.equal(writes, 0);
   }
   for (const url of ['http://bot.test/webhook', 'https://bot.test/elsewhere', 'https://user:pass@bot.test/webhook']) {
     assert.equal(await enableMembershipCallbacks(() => { throw new Error('Must not call'); }, url, 'secret'), false);
+  }
+});
+
+test('an existing one-connection webhook is upgraded to four without narrowing all-updates subscriptions', async () => {
+  for (const updates of [undefined, [], ['message', 'callback_query']]) {
+    const calls = [];
+    assert.equal(await enableMembershipCallbacks(async (method, body) => {
+      calls.push({ method, body });
+      return method === 'getWebhookInfo' ? { url: 'https://bot.test/webhook', max_connections: 1, allowed_updates: updates } : true;
+    }, 'https://bot.test/webhook', 'fake-secret'), true);
+    assert.equal(calls[1].body.max_connections, 4); assert.equal(calls[1].body.drop_pending_updates, false);
+    assert.deepEqual(calls[1].body.allowed_updates, updates || []);
   }
 });

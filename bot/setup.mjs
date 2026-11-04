@@ -1,3 +1,4 @@
+import { WEBHOOK_CONNECTIONS } from './load-control.mjs';
 // Owner-only, mobile-friendly webhook registration. Bot/API tokens never enter
 // this page or its URL. Only the existing random webhook secret is submitted.
 const headers = {
@@ -62,7 +63,7 @@ form.addEventListener('submit',async event=>{event.preventDefault();button.disab
     const webhook = new URL('/webhook', url.origin).href;
     await call('setWebhook', {
       url: webhook, secret_token: secret, allowed_updates: ['message', 'callback_query'],
-      max_connections: 1, drop_pending_updates: false,
+      max_connections: WEBHOOK_CONNECTIONS, drop_pending_updates: false,
     });
     const info = await call('getWebhookInfo', {});
     if (info?.url !== webhook) throw new Error('Webhook verification failed');

@@ -1,3 +1,4 @@
+import { WEBHOOK_CONNECTIONS } from './load-control.mjs';
 export const REQUIRED_CHANNEL = '@qhatel_roya';
 export const CHANNEL_URL = 'https://t.me/qhatel_roya';
 export const JOIN_CALLBACK = 'membership:check:v1';
@@ -36,7 +37,7 @@ export class MembershipGate {
 }
 
 // Existing installations subscribed only to messages. Upgrade the same verified
-// webhook, preserving its secret, connection count and pending updates. Never
+// webhook, preserving its secret and pending updates, with bounded parallel delivery. Never
 // change an unrelated webhook or trust a URL contained in a user message.
 export async function enableMembershipCallbacks(telegram, expectedURL, secret) {
   if (!expectedURL || !secret) return false;
@@ -45,9 +46,10 @@ export async function enableMembershipCallbacks(telegram, expectedURL, secret) {
   if (target.protocol !== 'https:' || target.pathname !== '/webhook' || target.username || target.password || target.search || target.hash) return false;
   const info = await telegram('getWebhookInfo', {});
   if (info?.url !== target.href) return false;
-  if (!info.allowed_updates?.length || info.allowed_updates.includes('callback_query')) return true;
+  const callbacksAllowed = !info.allowed_updates?.length || info.allowed_updates.includes('callback_query');
+  if (callbacksAllowed && info.max_connections >= WEBHOOK_CONNECTIONS) return true;
   await telegram('setWebhook', { url: info.url, secret_token: secret,
-    allowed_updates: [...new Set([...info.allowed_updates, 'message', 'callback_query'])],
-    max_connections: info.max_connections || 1, drop_pending_updates: false });
+    allowed_updates: !info.allowed_updates?.length ? [] : [...new Set([...info.allowed_updates, 'message', 'callback_query'])],
+    max_connections: Math.max(info.max_connections || 1, WEBHOOK_CONNECTIONS), drop_pending_updates: false });
   return true;
 }

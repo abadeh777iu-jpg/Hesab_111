@@ -60,7 +60,7 @@ test('owner registration uses server-side token, preserves pending updates and v
   assert.equal(response.status, 200);
   assert.equal(calls.length, 2);
   assert.ok(calls[0].url.endsWith('/setWebhook'));
-  assert.deepEqual(calls[0].body, { url: `${origin}/webhook`, secret_token: secret, allowed_updates: ['message', 'callback_query'], max_connections: 1, drop_pending_updates: false });
+  assert.deepEqual(calls[0].body, { url: `${origin}/webhook`, secret_token: secret, allowed_updates: ['message', 'callback_query'], max_connections: 4, drop_pending_updates: false });
   assert.ok(calls[1].url.endsWith('/getWebhookInfo'));
   const text = await response.text();
   assert.ok(text.includes('ثبت شد'));

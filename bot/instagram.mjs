@@ -134,22 +134,40 @@ export async function recognizeInstagramMusic(fetchImpl, url) {
 export function musicReply(track) {
   return `${track.uncertain ? 'تطبیق احتمالی' : 'آهنگی که سرویس پیدا کرد'} 🎵\n${track.title}\nخواننده: ${track.artist}\n${track.link ? `پخش رسمی: ${track.link}` : 'لینک پخش رسمیِ معتبر در پاسخ سرویس نبود.'}\nشناسایی: SongFinder\nفایل کامل با اجازهٔ دانلود در این نتیجه موجود نیست؛ فایل آهنگ رو از منبع نامشخص نمی‌فرستم.`;
 }
-export async function uploadInstagramVideo(env, chat, bytes, token, original) {
-  if (!isMusicCallback('igmusic:' + token) || !canonicalInstagram(original) || bytes.length > MAX_IG_VIDEO) throw new InstagramError('INPUT');
+export async function uploadInstagramVideo(env, chat, bytes, token, original, returnMetadata = false) {
+  if (!isMusicCallback('igmusic:' + token) || !canonicalInstagram(original) || bytes.length > MAX_IG_VIDEO || (typeof bytes === 'string' && !/^[A-Za-z0-9_-]{8,512}$/.test(bytes))) throw new InstagramError('INPUT');
   const body = new FormData(); body.set('chat_id', String(chat)); body.set('supports_streaming', 'true');
   body.set('caption', `ویدئوی عمومی از اینستاگرام 🌱 (اولین ویدئو، حداکثر ۲۰ مگابایت)\n${canonicalInstagram(original)}\nدریافت: vxInstagram\nبا زدن دکمه، فقط لینک عمومی برای شناسایی به SongFinder فرستاده می‌شه. دکمه تا ۳۰ دقیقه فعاله.`);
   body.set('reply_markup', JSON.stringify({ inline_keyboard: [[{ text: '🎵 شناسایی موسیقی', callback_data: 'igmusic:' + token }]] }));
-  body.set('video', new Blob([bytes], { type: 'video/mp4' }), 'instagram.mp4');
+  if (typeof bytes === 'string') body.set('video', bytes);
+  else body.set('video', new Blob([bytes], { type: 'video/mp4' }), 'instagram.mp4');
   const response = await (env.fetchImpl || fetch)(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendVideo`, { method: 'POST', body, redirect: 'manual', signal: AbortSignal.timeout(25000) });
   const data = JSON.parse(new TextDecoder().decode(await boundedBody(response, 64 * 1024, /^application\/json(?:;|$)/i)));
   if (data.ok !== true || !Number.isSafeInteger(data.result?.message_id) || !data.result?.video) throw new InstagramError('DELIVERY');
-  return data.result.message_id;
+  return returnMetadata ? { messageId: data.result.message_id, fileId: typeof data.result.video.file_id === 'string' && /^[A-Za-z0-9_-]{8,512}$/.test(data.result.video.file_id) ? data.result.video.file_id : null } : data.result.message_id;
 }
 
 // Separate public-data object and budgets; never touches prices or media quotas.
 export class InstagramFeedHandler {
-  constructor(ctx, env) { this.ctx = ctx; this.env = env; this.queue = Promise.resolve(); }
-  fetch(request) { const task = this.queue.then(() => this.handle(request)); this.queue = task.catch(() => {}); return task; }
+  constructor(ctx, env) { this.ctx = ctx; this.env = env; this.queue = Promise.resolve(); this.fileQueue = Promise.resolve(); }
+  fetch(request) {
+    if (['/ig-file-get', '/ig-file-put'].includes(new URL(request.url).pathname)) {
+      const task = this.fileQueue.then(() => this.files(request)); this.fileQueue = task.catch(() => {}); return task;
+    }
+    const task = this.queue.then(() => this.handle(request)); this.queue = task.catch(() => {}); return task;
+  }
+  async files(request) {
+    const { url: raw, fileId } = await request.json(), url = canonicalInstagram(raw), now = Date.now();
+    if (!url) return Response.json({ ok: false }, { status: 400 });
+    let rows = (await this.ctx.storage.get('igTelegramFiles') || []).filter(row => row.at <= now && now - row.at < 5 * 60000).slice(-10);
+    if (new URL(request.url).pathname === '/ig-file-put') {
+      if (fileId !== null && (typeof fileId !== 'string' || !/^[A-Za-z0-9_-]{8,512}$/.test(fileId))) return Response.json({ ok: false }, { status: 400 });
+      rows = rows.filter(row => row.url !== url);
+      if (fileId) rows.push({ url, fileId, at: now });
+      await this.ctx.storage.put('igTelegramFiles', rows.slice(-10));
+    }
+    return Response.json({ ok: true, value: rows.find(row => row.url === url)?.fileId || null });
+  }
   async handle(request) {
     try {
       const { url: raw } = await request.json(), url = canonicalInstagram(raw);

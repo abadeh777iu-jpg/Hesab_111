@@ -16,7 +16,7 @@ test('workerd enforces join, upgrades message-only webhook, handles inline callb
   const mf = new Miniflare(convertV4MiniflareOptions({ workers: [{
     name: 'join-runtime', modules: true, compatibilityDate: '2026-10-01', script: bundle.outputFiles[0].text,
     durableObjects: { CHATS: 'ChatSession' }, serviceBindings: { UPSTREAM: 'fake-join-telegram' },
-    bindings: { TELEGRAM_BOT_TOKEN: 'fake-token', TELEGRAM_WEBHOOK_SECRET: 'fake-secret', TELEGRAM_ALLOWED_USER_IDS: '42', OPENROUTER_API_KEY: 'fake-key', OPENROUTER_MODEL: 'test-model' },
+    bindings: { BOT_ASYNC_UPDATES: 'false', TELEGRAM_BOT_TOKEN: 'fake-token', TELEGRAM_WEBHOOK_SECRET: 'fake-secret', TELEGRAM_ALLOWED_USER_IDS: '42', OPENROUTER_API_KEY: 'fake-key', OPENROUTER_MODEL: 'test-model' },
   }, {
     name: 'fake-join-telegram', modules: true, compatibilityDate: '2026-10-01', script: `
       let status = 'left', modelCalls = 0, callbacks = 0, updates = ['message']; const sent = [];
