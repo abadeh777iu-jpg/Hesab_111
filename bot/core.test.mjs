@@ -114,3 +114,14 @@ test('news payload is untrusted user data, not system instructions or private co
       return Response.json({ choices: [{ message: { content: '[{"id":1,"text":"test"}]' } }] });
     } });
 });
+
+test('Iran news task explicitly translates English coverage into Persian and preserves attribution and uncertainty', async () => {
+  await complete({ apiKey: 'key', model: 'model', messages: [], newsItems: [{ id: 1, title: 'Iran report', source: 'فاکس‌نیوز', excerpt: 'An official claims something.' }], fetchImpl: async (url, options) => {
+    const body = JSON.parse(options.body);
+    assert.ok(body.messages[0].content.includes('خبر انگلیسی فاکس‌نیوز را به فارسی روان ترجمه'));
+    assert.ok(body.messages[0].content.includes('قیدهای احتمال و ابهام را حفظ کن'));
+    assert.ok(body.messages[0].content.includes('خروجی همه خبرها فارسی باشد'));
+    assert.equal(body.max_tokens, 320);
+    return Response.json({ choices: [{ message: { content: '[{"id":1,"text":"طبق گزارش فاکس، یک مقام چنین ادعایی کرده."}]' } }] });
+  } });
+});

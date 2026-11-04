@@ -19,3 +19,8 @@ The encoder performs only local audio encoding. It does not synthesize speech, t
 ## RSS XML parsing
 
 News parsing uses pinned `fast-xml-parser` **5.12.0** (MIT), with its dependency versions fixed by `package-lock.json`. Source: https://github.com/NaturalIntelligence/fast-xml-parser . Its MIT notice is retained in `licenses/fast-xml-parser-MIT.txt`; dependency licenses are included in their installed npm packages. Our wrapper rejects DTD/entities, bounds feed size/depth/item count, and reads only selected public RSS fields. The development-only `esbuild` **0.28.2** bundles the real parser for workerd regression tests; it is not a news service.
+
+
+## Public channel HTML parsing
+
+Fars' anonymous public channel page is parsed with pinned `htmlparser2` **12.0.0** (MIT), not evaluated as browser code. Source: https://github.com/fb55/htmlparser2 . The MIT notice is retained in `licenses/htmlparser2-MIT.txt`; transitive dependency versions are locked in `package-lock.json`, with their license files in installed npm packages. No cookies, browser automation, Telegram account session or login bypass are used. A bounded DOM walk reads original post text, the post's own timestamp and its permalink only.

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { isNewsQuestion, parseNewsFeed, selectNews, NEWS_SOURCES, NewsFeedHandler, newsReply, NEWS_CACHE_MS, NEWS_MAX_AGE } from './news.mjs';
+import { isNewsQuestion, parseNewsFeed, selectNews, NEWS_SOURCES, NewsFeedHandler, newsReply, NEWS_CACHE_MS, NEWS_MAX_AGE, parseFarsPage } from './news.mjs';
 
 const now = Date.parse('2026-11-04T12:00:00Z');
 const [isna, bbc] = NEWS_SOURCES;
@@ -51,7 +51,7 @@ test('selection deduplicates, bounds items, balances available sources and filte
   assert.equal(selectNews([a, { ...a, title: 'خبر آزمایشی دوم', url: a.url + '2' }, { ...a, title: 'خبر سوم', url: a.url + '3' }], now).length, 2);
 });
 
-test('shared cache serializes requests, never sends auth/private data, and refreshes only after 15 minutes', async t => {
+test('shared cache serializes requests, never sends auth/private data, and refreshes only at the one-minute boundary', async t => {
   let clock = now; t.mock.method(Date, 'now', () => clock);
   const { storage, state } = memory(); let calls = 0;
   const feed = new NewsFeedHandler({ storage }, { NAVASAN_API_KEY: 'must-not-leak', OPENROUTER_API_KEY: 'must-not-leak', fetchImpl: async (url, options) => {
@@ -65,11 +65,12 @@ test('shared cache serializes requests, never sends auth/private data, and refre
   } });
   const replies = await Promise.all([feed.fetch(), feed.fetch(), feed.fetch()]);
   for (const response of replies) assert.equal((await response.json()).items.length, 2);
-  assert.equal(calls, 2);
+  assert.equal(calls, NEWS_SOURCES.length);
   assert.deepEqual([...state.keys()].sort(), ['newsCache', 'newsNextFetch']);
   assert.ok(!JSON.stringify([...state.values()]).includes('must-not-leak'));
-  clock += NEWS_CACHE_MS + 1;
-  await feed.fetch(); assert.equal(calls, 4);
+  assert.equal(NEWS_CACHE_MS, 60_000);
+  clock += 59_999; await feed.fetch(); assert.equal(calls, NEWS_SOURCES.length);
+  clock++; await feed.fetch(); assert.equal(calls, NEWS_SOURCES.length * 2);
 });
 
 test('redirects, HTML, excessive streaming and HTTP errors do not trigger follows or rapid retries', async t => {
@@ -86,7 +87,7 @@ test('redirects, HTML, excessive streaming and HTTP errors do not trigger follow
     } });
     assert.equal((await feed.fetch()).status, 503, kind);
     assert.equal((await feed.fetch()).status, 503, kind);
-    assert.equal(calls, 2, kind);
+    assert.equal(calls, NEWS_SOURCES.length, kind);
   }
 });
 
@@ -118,7 +119,7 @@ test('news rewriting sends public excerpts only, isolates private history, keeps
     assert.equal(body.messages[1].role, 'user');
     assert.ok(body.messages[0].content.includes('غیرقابل‌اعتماد'));
     assert.ok(body.messages[0].content.includes('محاوره‌ای'));
-    const data = JSON.parse(body.messages[1].content).untrusted_rss_reports;
+    const data = JSON.parse(body.messages[1].content).untrusted_news_reports;
     assert.equal(data.length, 2);
     assert.equal(data[0].source, 'ایسنا');
     assert.equal(data[0].url, undefined);
@@ -159,4 +160,97 @@ test('one exact JSON code fence from a compatible model is accepted without a se
   assert.equal(calls, 1);
   assert.ok(html.includes('ایسنا یه خبر'));
   assert.ok(!html.includes('تیترهای تازه'));
+});
+
+
+const fars = NEWS_SOURCES.find(source => source.id === 'fars');
+const fox = NEWS_SOURCES.find(source => source.id === 'fox');
+const irib = NEWS_SOURCES.find(source => source.id === 'irib');
+const channelPost = ({ id = '123', href = 'https://t.me/farsna/123', stamp = new Date(now - 60_000).toISOString(), forwarded = false, body = '<b>خبر آزمایشی ایران</b><br/>خلاصه آزمایشی از تهران &amp; ایران' } = {}) =>
+  `<div class="tgme_widget_message" data-post="farsna/${id}">${forwarded ? '<div class="tgme_widget_message_forwarded_from">Forwarded</div>' : ''}<div class="tgme_widget_message_text js-message_text">${body}</div><a class="tgme_widget_message_date" href="${href}"><time datetime="${stamp}">12:00</time></a></div>`;
+
+test('requested publishers have verified direct endpoints or a clearly labelled public Fars channel', () => {
+  assert.deepEqual(NEWS_SOURCES.map(source => source.id).sort(), ['bbc', 'fars', 'fox', 'irib', 'isna']);
+  assert.equal(irib.url, 'https://www.irib-news.ir/fa/rss/allnews');
+  assert.equal(fox.url, 'https://moxie.foxnews.com/google-publisher/world.xml');
+  assert.equal(fars.url, 'https://t.me/s/Farsna');
+  assert.ok(fars.name.includes('کانال عمومی'));
+});
+
+test('Fox Iran/Iranian/Tehran coverage is accepted; unrelated world stories and lookalike terms are excluded', () => {
+  const link = 'https://www.foxnews.com/world/test-report';
+  for (const title of ['Iran announces a policy', 'IRANIAN official makes a statement', 'Talks in Tehran', 'Iranians discuss a change']) {
+    const items = parseNewsFeed(xml([row({ title, description: 'A short report.', category: 'World', url: link })]), fox, now);
+    assert.equal(items.length, 1, title); assert.equal(items[0].source, 'فاکس‌نیوز');
+  }
+  for (const title of ['Tirana election results', 'Canada weather update']) assert.equal(parseNewsFeed(xml([row({ title, description: 'World news.', category: 'World', url: link })]), fox, now).length, 0);
+  for (const url of ['https://www.foxnews.com.evil.test/world/test', 'http://www.foxnews.com/world/test', 'https://www.foxnews.com/account/test']) assert.equal(parseNewsFeed(xml([row({ title: 'Iran update', url })]), fox, now).length, 0);
+});
+
+test('IRIB accepts its current canonical host and dated Iran reports, not the obsolete domain or foreign reports', () => {
+  const rows = [row({ url: 'https://www.irib-news.ir/fa/news/123/test' }), row({ url: 'https://www.iribnews.ir/fa/news/123/test' })];
+  const items = parseNewsFeed(xml(rows), irib, now);
+  assert.equal(items.length, 1);
+  assert.equal(items[0].source, 'خبرگزاری صداوسیما');
+});
+
+test('public Fars HTML uses post dates and permalinks; forwarded, unsafe, media-only and undated posts are not news', () => {
+  const items = parseFarsPage('<html><body>' + channelPost() + '</body></html>', fars, now);
+  assert.equal(items.length, 1);
+  assert.equal(items[0].title, 'خبر آزمایشی ایران');
+  assert.equal(items[0].description, 'خلاصه آزمایشی از تهران & ایران');
+  assert.equal(items[0].url, 'https://t.me/farsna/123');
+  assert.equal(items[0].publishedAt, now - 60_000);
+  assert.equal(parseFarsPage(channelPost({ body: '🔴<br/>خبر آزمایشی ایران<br/>توضیح خبر' }), fars, now)[0].title, 'خبر آزمایشی ایران');
+  assert.equal(parseFarsPage(channelPost({ href: 'https://t.me/Farsna/123' }), fars, now).length, 1);
+  for (const bad of [{ forwarded: true }, { stamp: '' }, { stamp: '2026-11-04' }, { stamp: new Date(now - NEWS_MAX_AGE - 1).toISOString() }, { stamp: new Date(now + 360_000).toISOString() }, { body: '' }, { href: 'https://t.me/other/123' }, { href: 'https://t.me/farsna/999' }, { href: 'https://evil.test/farsna/123' }, { body: 'Unrelated world story' }]) assert.deepEqual(parseFarsPage(channelPost(bad), fars, now), [], JSON.stringify(bad));
+  assert.deepEqual(parseFarsPage('<html>login required</html>', fars, now), []);
+  assert.throws(() => parseFarsPage('x'.repeat(512 * 1024 + 1), fars, now));
+  assert.throws(() => parseFarsPage('<div>'.repeat(90) + '</div>'.repeat(90), fars, now));
+});
+
+test('minute rotation gives every available publisher coverage without user counters or flooding a two-news answer', () => {
+  const items = NEWS_SOURCES.map((source, index) => article(source, { title: `خبر آزمایشی ایران ${index}`, url: source.url, publishedAt: now - 60_000 }));
+  const seen = new Set();
+  for (let minute = 0; minute < 6; minute++) {
+    const selected = selectNews(items, now + minute * 60_000);
+    assert.equal(selected.length, 2);
+    assert.equal(selected.filter(item => ['bbc', 'fox'].includes(item.sourceId)).length, 1);
+    for (const item of selected) seen.add(item.sourceId);
+  }
+  assert.deepEqual([...seen].sort(), NEWS_SOURCES.map(source => source.id).sort());
+});
+
+test('upgrade ignores legacy fifteen-minute cache/retry deadlines and fetches all five sources immediately', async t => {
+  t.mock.method(Date, 'now', () => now);
+  const { storage, state } = memory();
+  state.set('newsCache', { items: [article(isna)], fetchedAt: now - 10_000 });
+  state.set('newsNextFetch', now + 15 * 60_000);
+  let calls = 0;
+  const feed = new NewsFeedHandler({ storage }, { fetchImpl: async () => { calls++; return new Response('Unavailable', { status: 503 }); } });
+  const response = await (await feed.fetch()).json();
+  assert.equal(calls, 5); assert.equal(response.stale, true);
+  assert.equal(state.get('newsNextFetch').at, now + 60_000);
+  await feed.fetch(); assert.equal(calls, 5);
+});
+
+
+test('large Fox RSS has a source-specific one-MiB bound, not an unbounded or global size increase', () => {
+  const large = xml([row({ title: 'Iran test', url: 'https://www.foxnews.com/world/iran-test' })]).replace('</channel>', '<unused>' + 'x'.repeat(600 * 1024) + '</unused></channel>');
+  assert.equal(parseNewsFeed(large, fox, now).length, 1);
+  assert.throws(() => parseNewsFeed(large, isna, now));
+  assert.throws(() => parseNewsFeed('x'.repeat(1024 * 1024 + 1), fox, now));
+});
+
+test('without model credit, Fox falls back to its attributed original English title without inventing a translation', async () => {
+  let calls = 0;
+  const html = await newsReply({ OPENROUTER_API_KEY: 'key', OPENROUTER_MODEL: 'model', fetchImpl: async () => {
+    calls++;
+    return new Response('private billing rejection', { status: 402 });
+  } }, [article(fox, { title: 'Iran test report', description: 'An attributed claim.', url: 'https://www.foxnews.com/world/iran-test' })]);
+  assert.equal(calls, 1);
+  assert.ok(html.includes('Iran test report'));
+  assert.ok(html.includes('فاکس‌نیوز'));
+  assert.ok(html.includes('https://www.foxnews.com/world/iran-test'));
+  assert.ok(!html.includes('private billing rejection'));
 });

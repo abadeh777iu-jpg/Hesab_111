@@ -1,14 +1,19 @@
 import { XMLParser, XMLValidator } from 'fast-xml-parser';
+import { parseDocument } from 'htmlparser2';
 import { complete } from './core.mjs';
 import { escapeHtml } from './format.mjs';
 import { localTime } from './live-data.mjs';
 
-// Fixed public RSS endpoints only. No user URL, key, article fetch or paid news API.
+// Fixed public publisher feeds/channel only. No user URL, key or paid news API.
 export const NEWS_SOURCES = Object.freeze([
   { id: 'isna', name: 'ایسنا', url: 'https://www.isna.ir/rss/tp/1', hosts: ['www.isna.ir', 'isna.ir'], path: '/news/' },
   { id: 'bbc', name: 'بی‌بی‌سی فارسی', url: 'https://feeds.bbci.co.uk/persian/rss.xml', hosts: ['www.bbc.com', 'www.bbc.co.uk'], path: '/persian/' },
+  { id: 'irib', name: 'خبرگزاری صداوسیما', url: 'https://www.irib-news.ir/fa/rss/allnews', hosts: ['www.irib-news.ir', 'irib-news.ir'], path: '/fa/news/' },
+  { id: 'fox', name: 'فاکس‌نیوز', url: 'https://moxie.foxnews.com/google-publisher/world.xml', hosts: ['www.foxnews.com', 'foxnews.com'], path: '/world/', maxBytes: 1024 * 1024 },
+  { id: 'fars', name: 'فارس (کانال عمومی)', url: 'https://t.me/s/Farsna', hosts: ['t.me'], path: '/farsna/', kind: 'telegram' },
 ]);
-export const NEWS_CACHE_MS = 15 * 60_000;
+export const NEWS_CACHE_MS = 60_000;
+const NEWS_POLICY = 'minute-five-sources-v1';
 export const NEWS_MAX_AGE = 24 * 60 * 60_000;
 export const NEWS_UNAVAILABLE = 'الان خبر تازهٔ قابل‌اتکایی از ایران دستم نیست؛ نمی‌خوام از خودم چیزی بگم. کمی بعد ازم بپرس 🌱';
 const MAX_FEED_BYTES = 512 * 1024;
@@ -40,6 +45,7 @@ function safeLink(value, source) {
   if (typeof value !== 'string') return null;
   try {
     const url = new URL(value, source.url);
+    if (source.kind === 'telegram' && /^\/farsna\/\d+$/i.test(url.pathname)) url.pathname = url.pathname.toLowerCase();
     if (url.protocol !== 'https:' || url.username || url.password || url.port ||
         !source.hosts.includes(url.hostname) || !url.pathname.startsWith(source.path) || url.href.length > 1800) return null;
     url.search = ''; url.hash = '';
@@ -49,7 +55,7 @@ function safeLink(value, source) {
 const iran = /ایران|تهران|جمهوری اسلامی|خلیج فارس|آباده|اصفهان|شیراز|مشهد|تبریز|خوزستان|کرمان|گیلان|مازندران|اردبیل|قم|زنجان|سمنان|بوشهر|سیستان|هرمزگان|چهارمحال|لرستان|ایلام|قزوین|همدان|یزد|البرز|اراک|ارومیه|سنندج|بندرعباس/u;
 
 export function parseNewsFeed(xml, source, now = Date.now()) {
-  if (typeof xml !== 'string' || new TextEncoder().encode(xml).length > MAX_FEED_BYTES || /<!DOCTYPE|<!ENTITY/i.test(xml)) throw new Error('Invalid news feed');
+  if (typeof xml !== 'string' || new TextEncoder().encode(xml).length > (source.maxBytes || MAX_FEED_BYTES) || /<!DOCTYPE|<!ENTITY/i.test(xml)) throw new Error('Invalid news feed');
   if (XMLValidator.validate(xml) !== true) throw new Error('Invalid news XML');
   const parsed = new XMLParser({ ignoreAttributes: true, parseTagValue: false, htmlEntities: true, maxNestedTags: 20 }).parse(xml);
   const raw = parsed?.rss?.channel?.item;
@@ -63,22 +69,74 @@ export function parseNewsFeed(xml, source, now = Date.now()) {
     const publishedAt = typeof row.pubDate === 'string' ? Date.parse(row.pubDate) : NaN;
     const category = (Array.isArray(row.category) ? row.category : [row.category]).map(value => plain(value, 100)).join(' ');
     // General Persian feeds also carry foreign stories. Keep Iran-related stories,
-    // plus ISNA's explicitly domestic sections, not unrelated world headlines.
-    const domestic = source.id === 'isna' && /استان|اجتماعی|اقتصادی|سیاسی|فرهنگ/u.test(category) && !/جهان|بین.?الملل/u.test(category);
-    if (!title || !url || !fresh(publishedAt, now) || (!iran.test(title + ' ' + description) && !domestic)) continue;
+    // plus ISNA/IRIB explicitly domestic sections, not unrelated world headlines.
+    const domestic = ['isna', 'irib'].includes(source.id) && /استان|اجتماعی|اقتصادی|سیاسی|فرهنگ/u.test(category) && !/جهان|بین.?الملل/u.test(category);
+    if (!title || !url || !fresh(publishedAt, now) || (!iran.test(title + ' ' + description) && !/\b(?:iran(?:ian|ians)?|tehran)\b/i.test(title + ' ' + description) && !domestic)) continue;
+    result.push({ title, description, url, publishedAt, source: source.name, sourceId: source.id });
+  }
+  return result;
+}
+
+// Telegram's anonymous public channel page is used because Fars' former RSS
+// routes now return account/404/login HTML. Only dated, original Farsna posts
+// with actual text are accepted; forwarded posts and media-only posts are not.
+export function parseFarsPage(html, source, now = Date.now()) {
+  if (typeof html !== 'string' || new TextEncoder().encode(html).length > MAX_FEED_BYTES) throw new Error('Large channel page');
+  const doc = parseDocument(html, { decodeEntities: true });
+  const hasClass = (node, name) => (node.attribs?.class || '').split(/\s+/).includes(name);
+  const find = (root, predicate) => {
+    const found = [], stack = [[root, 0]];
+    let count = 0;
+    while (stack.length) {
+      const [node, depth] = stack.pop();
+      if (++count > 80_000 || depth > 80) throw new Error('Complex channel page');
+      if (predicate(node)) found.push(node);
+      for (let i = (node.children?.length || 0) - 1; i >= 0; i--) stack.push([node.children[i], depth + 1]);
+    }
+    return found;
+  };
+  const textOf = root => {
+    let text = ''; const stack = [root];
+    while (stack.length && text.length < 4096) {
+      const node = stack.pop();
+      if (['script', 'style'].includes(node.name)) continue;
+      if (node.type === 'text') text += node.data.slice(0, 4096 - text.length);
+      if (node.name === 'br') text += '\n';
+      for (let i = (node.children?.length || 0) - 1; i >= 0; i--) stack.push(node.children[i]);
+    }
+    return text;
+  };
+  const posts = find(doc, node => /^farsna\/\d+$/i.test(node.attribs?.['data-post'] || '')).slice(-50);
+  const result = [];
+  for (const post of posts) {
+    if (find(post, node => hasClass(node, 'tgme_widget_message_forwarded_from')).length) continue;
+    const body = find(post, node => hasClass(node, 'tgme_widget_message_text'))[0];
+    const dateLink = find(post, node => hasClass(node, 'tgme_widget_message_date'))[0];
+    const time = dateLink && find(dateLink, node => node.name === 'time' && node.attribs?.datetime)[0];
+    const stamp = time?.attribs.datetime;
+    const publishedAt = typeof stamp === 'string' && /T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(stamp) ? Date.parse(stamp) : NaN;
+    const id = post.attribs['data-post'].split('/')[1];
+    const url = safeLink(dateLink?.attribs?.href, source);
+    if (!body || !url || new URL(url).pathname !== `/farsna/${id}` || !fresh(publishedAt, now)) continue;
+    const lines = textOf(body).split(/\n+/).map(line => plain(line, 600)).filter(line => /\p{L}/u.test(line) && !/^@farsna\b/i.test(line));
+    const title = plain(lines[0], 240);
+    const description = plain(lines.slice(1).join(' ').replace(/@farsna\b/gi, ''), 600);
+    if (!title || !iran.test(title + ' ' + description)) continue;
     result.push({ title, description, url, publishedAt, source: source.name, sourceId: source.id });
   }
   return result;
 }
 
 async function fetchNewsSource(source, fetchImpl) {
+  const maxBytes = source.maxBytes || MAX_FEED_BYTES;
+  const isChannel = source.kind === 'telegram';
   const response = await fetchImpl(source.url, { redirect: 'manual', signal: AbortSignal.timeout(8000),
-    headers: { Accept: 'application/rss+xml, application/xml, text/xml' } });
+    headers: { Accept: isChannel ? 'text/html' : 'application/rss+xml, application/xml, text/xml' } });
   const type = response.headers.get('Content-Type')?.toLowerCase() || '';
-  if (!response.ok || !/(?:application\/(?:rss\+xml|xml)|text\/xml)/.test(type)) {
+  if (!response.ok || !(isChannel ? /^text\/html(?:;|$)/.test(type) : /^(?:application\/(?:rss\+xml|xml)|text\/xml)(?:;|$)/.test(type))) {
     await response.body?.cancel(); throw new Error('News HTTP or MIME');
   }
-  if (Number(response.headers.get('Content-Length')) > MAX_FEED_BYTES) {
+  if (Number(response.headers.get('Content-Length')) > maxBytes) {
     await response.body?.cancel(); throw new Error('Large news feed');
   }
   if (!response.body) throw new Error('Empty news feed');
@@ -89,13 +147,14 @@ async function fetchNewsSource(source, fetchImpl) {
       const { done, value } = await reader.read();
       if (done) break;
       size += value.byteLength;
-      if (size > MAX_FEED_BYTES) { await reader.cancel(); throw new Error('Large news feed'); }
+      if (size > maxBytes) { await reader.cancel(); throw new Error('Large news feed'); }
       chunks.push(value);
     }
   } finally { reader.releaseLock(); }
   const bytes = new Uint8Array(size); let at = 0;
   for (const chunk of chunks) { bytes.set(chunk, at); at += chunk.length; }
-  return parseNewsFeed(new TextDecoder('utf-8', { fatal: true }).decode(bytes), source);
+  const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  return isChannel ? parseFarsPage(text, source) : parseNewsFeed(text, source);
 }
 
 export function selectNews(items, now = Date.now()) {
@@ -105,10 +164,15 @@ export function selectNews(items, now = Date.now()) {
     if (seen.has(item.url) || seen.has(titleKey)) return false;
     seen.add(item.url); seen.add(titleKey); return true;
   });
-  // Prefer one story from each available source, rather than implying that a
-  // single publisher constitutes independent corroboration.
+  // Rotate eligible publishers by minute, without user counters. Otherwise a
+  // high-volume local feed can permanently crowd out slower Iran coverage on
+  // Fox/BBC. Keep one domestic and one international source when both exist.
+  const latest = unique.filter((item, index) => unique.findIndex(other => other.sourceId === item.sourceId) === index);
+  const international = latest.filter(item => ['fox', 'bbc'].includes(item.sourceId));
+  const domestic = latest.filter(item => !['fox', 'bbc'].includes(item.sourceId));
+  const minute = Math.floor(now / NEWS_CACHE_MS);
   const selected = [];
-  for (const item of unique) if (!selected.some(other => other.sourceId === item.sourceId)) selected.push(item);
+  for (const pool of [domestic, international]) if (pool.length) selected.push(pool[minute % pool.length]);
   for (const item of unique) if (selected.length < MAX_ITEMS && !selected.includes(item)) selected.push(item);
   return selected.slice(0, MAX_ITEMS).sort((a, b) => b.publishedAt - a.publishedAt);
 }
@@ -127,14 +191,17 @@ export class NewsFeedHandler {
     const cache = await this.ctx.storage.get('newsCache');
     const cachedItems = selectNews(cache?.items || [], now);
     const reply = (items, stale = false, fetchedAt = cache?.fetchedAt || null) => Response.json({ items, stale, fetchedAt }, { status: items.length ? 200 : 503 });
-    if (cachedItems.length && cache.fetchedAt <= now && now - cache.fetchedAt < NEWS_CACHE_MS) return reply(cachedItems);
-    if ((await this.ctx.storage.get('newsNextFetch')) > now) return reply(cachedItems, true);
+    if (cachedItems.length && cache.fetchedAt <= now && now - cache.fetchedAt < NEWS_CACHE_MS && cache.policy === NEWS_POLICY) return reply(cachedItems);
+    const nextFetch = await this.ctx.storage.get('newsNextFetch');
+    // Ignore the old 15-minute numeric deadline on upgrade, without touching
+    // market/media quotas or deleting still-usable public cached headlines.
+    if (nextFetch?.policy === NEWS_POLICY && nextFetch.at > now) return reply(cachedItems, true);
     // Reserve before I/O; failures and concurrent readers cannot hammer RSS.
-    await this.ctx.storage.put('newsNextFetch', now + NEWS_CACHE_MS);
+    await this.ctx.storage.put('newsNextFetch', { policy: NEWS_POLICY, at: now + NEWS_CACHE_MS });
     const results = await Promise.allSettled(NEWS_SOURCES.map(source => fetchNewsSource(source, this.env.fetchImpl || fetch)));
     const items = selectNews(results.flatMap(result => result.status === 'fulfilled' ? result.value : []));
     if (items.length) {
-      await this.ctx.storage.put('newsCache', { items, fetchedAt: now });
+      await this.ctx.storage.put('newsCache', { items, fetchedAt: now, policy: NEWS_POLICY });
       return reply(items, false, now);
     }
     // Cached stories are still explicitly timestamped, never beyond 24 hours.
