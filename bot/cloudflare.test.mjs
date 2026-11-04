@@ -938,3 +938,31 @@ test('rewrite billing error is actionable, does not replace news with headlines,
   await worker.fetch(request(update(1, 'چه خبر؟')), env);
   assert.equal(calls.filter(call => call.url.includes('openrouter.ai')).length, 1);
 });
+
+test('date questions use only the shared calendar, preserve bounded history and do not enroll new alerts or consume media/model budgets', async () => {
+  const { env, calls, state } = setup(); let calendarCalls = 0;
+  env.MARKETS = { idFromName: name => { assert.equal(name, 'iran-calendar'); return name; }, get: () => ({ fetch: async url => {
+    calendarCalls++; assert.equal(url, 'https://market.internal/calendar');
+    return new Response('امروز چهارشنبه‌ست، سیزدهم آبان ۱۴۰۵ 🌱\nروز دانش‌آموز');
+  } }) };
+  const worker = createWorker();
+  await worker.fetch(request(update(1, 'امروز چندمه؟')), env);
+  assert.equal(calendarCalls, 1); assert.equal(calls.filter(call => call.url.includes('openrouter.ai')).length, 0);
+  assert.ok(calls.at(-1).body.text.includes('روز دانش‌آموز'));
+  assert.equal(state.get('session').messages.at(-1).content, calls.at(-1).body.text);
+  assert.ok(state.get('session').messages.length <= 30);
+  assert.equal(state.has('mediaUsage'), false); assert.equal(state.has('followup'), false);
+  await worker.fetch(request(update(1, 'امروز چندمه؟')), env);
+  await worker.fetch(request(update(2, '/date')), env);
+  assert.equal(calendarCalls, 1);
+});
+
+test('calendar source outage still returns a current Tehran date instead of asking the model to invent occasions', async () => {
+  const { env, calls } = setup();
+  env.MARKETS = { idFromName: name => name, get: () => ({ fetch: async () => { throw new Error('private upstream error'); } }) };
+  await createWorker().fetch(request(update(1, 'امروز چه مناسبتی داره؟')), env);
+  assert.equal(calls.filter(call => call.url.includes('openrouter.ai')).length, 0);
+  assert.ok(calls.at(-1).body.text.includes('به وقت ایران'));
+  assert.ok(calls.at(-1).body.text.includes('حدس نمی‌زنم'));
+  assert.ok(!calls.at(-1).body.text.includes('private upstream error'));
+});
