@@ -61,7 +61,7 @@ form.addEventListener('submit',async event=>{event.preventDefault();button.disab
     };
     const webhook = new URL('/webhook', url.origin).href;
     await call('setWebhook', {
-      url: webhook, secret_token: secret, allowed_updates: ['message'],
+      url: webhook, secret_token: secret, allowed_updates: ['message', 'callback_query'],
       max_connections: 1, drop_pending_updates: false,
     });
     const info = await call('getWebhookInfo', {});

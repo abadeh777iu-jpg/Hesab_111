@@ -20,7 +20,7 @@ function setup() {
   };
   const calls = [];
   const env = {
-    TELEGRAM_BOT_TOKEN: 'test-token', TELEGRAM_WEBHOOK_SECRET: 'test-secret',
+    TELEGRAM_BOT_TOKEN: 'test-token', TELEGRAM_WEBHOOK_SECRET: 'test-secret', JOIN_REQUIRED: 'false',
     OPENROUTER_API_KEY: 'test-key', OPENROUTER_MODEL: 'test/model', TELEGRAM_ALLOWED_USER_IDS: '42',
     fetchImpl: async (url, options) => {
       calls.push({ url, body: JSON.parse(options.body) });
@@ -988,4 +988,117 @@ test('about and help expose creator contact and command without changing the sho
   await worker.fetch(request(update(2, '/help')), env);
   assert.ok(calls.at(-1).body.text.includes('/creator'));
   assert.equal(calls.filter(call => call.url.includes('openrouter.ai')).length, 0);
+});
+
+function withMembership(options = {}) {
+  const f = setup(); delete f.env.JOIN_REQUIRED;
+  const original = f.env.fetchImpl;
+  f.memberStatus = options.status || 'left'; f.adminStatus = options.admin || 'administrator';
+  f.env.fetchImpl = async (url, requestOptions) => {
+    const method = url.split('/').at(-1), body = JSON.parse(requestOptions.body);
+    let result;
+    if (['getMe', 'getChatMember', 'getWebhookInfo', 'setWebhook', 'answerCallbackQuery', 'editMessageReplyMarkup'].includes(method)) {
+      f.calls.push({ url, body });
+      if (method === 'getMe') result = { id: 900, is_bot: true };
+      if (method === 'getChatMember') {
+        if (options.error) return new Response('private-token-response', { status: 403 });
+        assert.equal(body.chat_id, '@qhatel_roya');
+        result = { user: { id: body.user_id }, status: body.user_id === 900 ? f.adminStatus : f.memberStatus };
+      }
+      if (method === 'getWebhookInfo') result = { url: 'https://example.workers.dev/webhook', allowed_updates: ['message'], max_connections: 1 };
+      if (method === 'setWebhook') result = true;
+      return Response.json({ ok: true, result });
+    }
+    return original(url, requestOptions);
+  };
+  return f;
+}
+function joinCallback(id = 2, user = 42) {
+  return { update_id: id, callback_query: { id: `test-${id}`, from: { id: user }, data: 'membership:check:v1', message: { message_id: 10, from: { id: 900, is_bot: true }, chat: { id: user, type: 'private' } } } };
+}
+
+test('nonmembers cannot start, chat, use media, news, dates, prices, weather or enable paid outreach', async () => {
+  for (const text of ['/start', 'سلام', '/image منظره', '/voice سلام', '/news', '/date', '/prices', '/weather', '/test_snow', '/followup', '/alerts', '/creator bypass attempt']) {
+    const { env, calls, state } = withMembership();
+    await createWorker().fetch(request(update(1, text)), env);
+    assert.ok(calls.every(c => c.url.includes('api.telegram.org')));
+    const sent = calls.at(-1).body;
+    assert.equal(sent.reply_markup.inline_keyboard[0][0].url, 'https://t.me/qhatel_roya');
+    assert.equal(sent.reply_markup.inline_keyboard[1][0].callback_data, 'membership:check:v1');
+    assert.equal(state.get('session').messages.length, 0);
+    for (const key of ['followup', 'weather', 'snowPreview', 'mediaUsage']) assert.equal(state.has(key), false, key);
+    assert.equal(calls.filter(c => c.url.endsWith('/setWebhook')).length, 1);
+  }
+});
+
+test('only actual membership opens chat, and leaving immediately closes it again without a positive cache', async () => {
+  const f = withMembership({ status: 'member' }); const worker = createWorker();
+  await worker.fetch(request(update(1, 'سلام')), f.env);
+  assert.equal(f.calls.filter(c => c.url.includes('openrouter.ai')).length, 1);
+  f.memberStatus = 'left';
+  await worker.fetch(request(update(2, 'دوباره سلام')), f.env);
+  assert.equal(f.calls.filter(c => c.url.includes('openrouter.ai')).length, 1);
+  assert.ok(f.calls.at(-1).body.reply_markup);
+  assert.equal(f.state.get('session').messages.length, 2);
+});
+
+test('join callback is acknowledged, rechecks the clicking user and unlocks no paid request until a new message', async () => {
+  const f = withMembership(); const worker = createWorker();
+  await worker.fetch(request(joinCallback()), f.env);
+  assert.ok(f.calls.some(c => c.url.endsWith('/answerCallbackQuery') && c.body.callback_query_id === 'test-2'));
+  assert.ok(f.calls.at(-1).body.reply_markup);
+  f.memberStatus = 'member';
+  await worker.fetch(request(joinCallback(3)), f.env);
+  assert.ok(f.calls.at(-1).body.text.includes('عضویتت تأیید شد'));
+  assert.ok(f.calls.some(c => c.url.endsWith('/editMessageReplyMarkup') && c.body.message_id === 10));
+  assert.equal(f.calls.filter(c => c.url.includes('openrouter.ai')).length, 0);
+  assert.equal(f.state.get('session').messages.length, 0);
+  assert.equal(f.state.has('followup'), false);
+  const length = f.calls.length;
+  await worker.fetch(request(joinCallback(3)), f.env); assert.equal(f.calls.length, length);
+  await worker.fetch(request(update(4, 'سلام')), f.env);
+  assert.equal(f.calls.filter(c => c.url.includes('openrouter.ai')).length, 1);
+});
+
+test('forged, unrelated, group and cross-user callbacks cannot reach any API', async () => {
+  const f = withMembership(); const worker = createWorker();
+  const wrongData = joinCallback(); wrongData.callback_query.data = 'membership:check:other';
+  const wrongChat = joinCallback(); wrongChat.callback_query.message.chat.id = 99;
+  const group = joinCallback(); group.callback_query.message.chat.type = 'group';
+  const bot = joinCallback(); bot.callback_query.from.is_bot = true;
+  const inline = joinCallback(); delete inline.callback_query.message;
+  const mixed = { ...joinCallback(), message: update().message };
+  for (const body of [wrongData, wrongChat, group, bot, inline, mixed, joinCallback(9, 99)]) await worker.fetch(request(body), f.env);
+  assert.equal((await worker.fetch(request(joinCallback(), 'bad-secret'), f.env)).status, 403);
+  assert.equal(f.calls.length, 0); assert.equal(f.state.size, 0);
+});
+
+test('Telegram errors or missing admin rights never unlock chat or expose upstream errors', async () => {
+  for (const options of [{ admin: 'member', status: 'member' }, { error: true, status: 'member' }]) {
+    const f = withMembership(options);
+    await createWorker().fetch(request(update(1, 'سلام')), f.env);
+    assert.ok(f.calls.at(-1).body.text.includes('فعلاً چت باز نمی‌شه'));
+    assert.ok(!f.calls.at(-1).body.text.includes('private-token-response'));
+    assert.equal(f.calls.filter(c => c.url.includes('openrouter.ai')).length, 0);
+  }
+});
+
+test('privacy, creator contact, deletion and opt-outs remain available without membership', async () => {
+  for (const text of ['/privacy', '/about', '/help', '/creator', 'سازنده کیه؟', '/reset', '/stop', '/weatherstop', '/forgetcity']) {
+    const f = withMembership(); await createWorker().fetch(request(update(1, text)), f.env);
+    assert.equal(f.calls.filter(c => c.url.endsWith('/getChatMember')).length, 0);
+    assert.equal(f.calls.filter(c => c.url.includes('openrouter.ai')).length, 0);
+    assert.ok(f.calls.some(c => c.url.endsWith('/sendMessage')));
+  }
+});
+
+test('nonmember alarms do not send check-ins or incur weather/model costs, while preserving opt-out preferences', async () => {
+  const f = withMembership();
+  f.state.set('followup', { chatId: 42, dueAt: Date.now() - 1000, noticeShown: true, disabled: false });
+  f.state.set('weather', { chatId: 42, alertsEnabled: true, nextCheckAt: Date.now() - 1000, city: { name: 'آباده', latitude: 31.16, longitude: 52.65 } });
+  await f.session.alarm();
+  assert.equal(f.state.get('followup').dueAt, null);
+  assert.ok(f.state.get('weather').nextCheckAt > Date.now());
+  assert.equal(f.state.has('weatherOptOut'), false);
+  assert.equal(f.calls.filter(c => c.url.includes('sendMessage') || c.url.includes('openrouter.ai') || c.url.includes('open-meteo')).length, 0);
 });

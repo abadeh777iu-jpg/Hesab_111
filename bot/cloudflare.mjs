@@ -1,3 +1,4 @@
+import { MembershipGate, membershipRequired, JOIN_CALLBACK, JOIN_KEYBOARD, JOIN_TEXT, JOIN_UNAVAILABLE, enableMembershipCallbacks } from './membership.mjs';
 import { CREATOR_REPLY, isCreatorQuestion } from './creator.mjs';
 import { complete, splitMessage, PERSONA_GREETING, HISTORY_LIMIT, START_GREETING, OUTREACH_NOTICE } from './core.mjs';
 import { handleSetup } from './setup.mjs';
@@ -12,7 +13,7 @@ const TTL = 30 * 60_000;
 export const FOLLOWUP_NOTICE = OUTREACH_NOTICE;
 export const FOLLOWUP_DELAY = 24 * 60 * 60_000;
 export const FOLLOWUP_TEXT = 'سلام رفیق، امروز چطوری؟ 🙂🌱\n\nلغو احوال‌پرسی: /stop';
-export const CLOUD_PRIVACY = 'پیام‌ها برای پاسخ به OpenRouter و ارائه‌دهندهٔ مدل ارسال می‌شن. حداکثر ۳۰ پیام اخیر در کلودفلر نگه داشته و بعد از ۳۰ دقیقه بی‌فعالیتی یا /reset از حافظهٔ فعال حذف می‌شن. احوال‌پرسی پس از اطلاع کوتاه در گفتگو خودکار فعاله؛ حدود ۲۴ ساعت بعد از آخرین پیام، یک پیام عمومی می‌فرستیم، نه پیام تکراری روزانه. لغو: /stop — فعال‌سازی دوباره: /followup. شناسهٔ چت و زمان ارسال جدا از متن گفتگو ذخیره می‌شن؛ با لغو، این دو حذف و فقط ترجیح خاموشی نگه داشته می‌شه تا با پیام جدید یا /start دوباره فعال نشه. /reset هم پیگیری رو خاموش می‌کنه. پیام‌های تلگرام، داده‌های سرویس مدل و نسخه‌های پشتیبان تابع سیاست همون سرویس‌ها هستن. شهر پیش‌فرض آباده، فارس است، نه لزوماً محل زندگی تو. پیام‌های خودکار بعد از اطلاع کلیِ پیام‌دادن فعال می‌شن. جملهٔ همراه خبر هوا با OpenRouter تولید می‌شه؛ اگر گفتگوی تازه‌ای باشه، فقط یک نشانهٔ کلی برای ملایم‌ترشدن لحن به‌صورت محلی گرفته می‌شه؛ متن خصوصی گفتگو در درخواست نوشتن جمله فرستاده نمی‌شه. شهر دلخواه و مختصات تقریبی آن جداگانه برای هوا نگه داشته و به Open-Meteo ارسال می‌شه؛ حذف شهر و هشدارها: /forgetcity یا /reset. ترجیح خاموشی هوا هم جدا نگه داشته می‌شه تا با پیام جدید دوباره فعال نشه. /stop همهٔ پیام‌های خودکار رو خاموش می‌کنه. زمان درخواست تست برف فقط برای محدودکردن مصرف تا یک ساعت نگه داشته می‌شه. چت و نوشتن پاسخ روی OpenRouter می‌مونه. برای عکس، توضیح درخواستی به Free.ai و مدل تصویر فرستاده می‌شه؛ برای ویس، فقط متن پاسخ به سرویس صدای OpenRouter و ارائه‌دهندهٔ مدل گفتار فرستاده می‌شه؛ اگر مدیر آگاهانه سرویس رسانه رو عوض کنه، مقصد همان سرویس انتخابی می‌شه. فایل خروجی Free.ai ممکنه تا مدتی روی آدرس عمومی سرویس در دسترس باشه و سیاست نگهداری خودش اعمال می‌شه؛ فایل ساخته‌شده به تلگرام ارسال می‌شه ولی این برنامه فایل رو ذخیره یا لاگ نمی‌کنه. ویس صدای مصنوعیه، نه صدای واقعی امیر. بودجهٔ مصرف عکس و ویس بدون متن یا فایل تا پایان روز UTC نگه داشته می‌شه؛ /reset این محدودیت مصرف رو پاک نمی‌کنه. اخبار ایران فقط با سؤال تو از خوراک عمومی ایسنا، بی‌بی‌سی فارسی، صداوسیما و فاکس‌نیوز و صفحهٔ عمومی کانال فارس دریافت می‌شه؛ متن خصوصی یا کلیدت به رسانه‌ها نمی‌ره. فقط تیتر و خلاصهٔ خبرها برای بازنویسی به OpenRouter می‌ره و از اعتبار مدیر استفاده می‌کنه؛ این خلاصه، تأیید مستقل گزارش رسانه نیست. دریافت خبرها تا یک دقیقه مشترک cache می‌شه؛ در قطع منبع، آخرین داده با برچسب ذخیره‌شده و فقط تا ۲۴ ساعت از انتشار قابل نمایشه. پیام خبری خودکار نداریم. تاریخ و روز هفته به وقت ایران از ساعت برنامه محاسبه می‌شه؛ مناسبت‌های ثابت محلی‌اند و تعطیلات از تقویم عمومی ایران گوگل، بدون شناسه یا پیام خصوصی، دریافت و مشترک ذخیره می‌شن. پاسخ تقویم از OpenRouter اعتبار مصرف نمی‌کنه و اعلان روزانهٔ تازه‌ای فعال نمی‌کنه. لطفاً اطلاعات حساس نفرست.';
+export const CLOUD_PRIVACY = 'پیام‌ها برای پاسخ به OpenRouter و ارائه‌دهندهٔ مدل ارسال می‌شن. حداکثر ۳۰ پیام اخیر در کلودفلر نگه داشته و بعد از ۳۰ دقیقه بی‌فعالیتی یا /reset از حافظهٔ فعال حذف می‌شن. احوال‌پرسی پس از اطلاع کوتاه در گفتگو خودکار فعاله؛ حدود ۲۴ ساعت بعد از آخرین پیام، یک پیام عمومی می‌فرستیم، نه پیام تکراری روزانه. لغو: /stop — فعال‌سازی دوباره: /followup. شناسهٔ چت و زمان ارسال جدا از متن گفتگو ذخیره می‌شن؛ با لغو، این دو حذف و فقط ترجیح خاموشی نگه داشته می‌شه تا با پیام جدید یا /start دوباره فعال نشه. /reset هم پیگیری رو خاموش می‌کنه. پیام‌های تلگرام، داده‌های سرویس مدل و نسخه‌های پشتیبان تابع سیاست همون سرویس‌ها هستن. شهر پیش‌فرض آباده، فارس است، نه لزوماً محل زندگی تو. پیام‌های خودکار بعد از اطلاع کلیِ پیام‌دادن فعال می‌شن. جملهٔ همراه خبر هوا با OpenRouter تولید می‌شه؛ اگر گفتگوی تازه‌ای باشه، فقط یک نشانهٔ کلی برای ملایم‌ترشدن لحن به‌صورت محلی گرفته می‌شه؛ متن خصوصی گفتگو در درخواست نوشتن جمله فرستاده نمی‌شه. شهر دلخواه و مختصات تقریبی آن جداگانه برای هوا نگه داشته و به Open-Meteo ارسال می‌شه؛ حذف شهر و هشدارها: /forgetcity یا /reset. ترجیح خاموشی هوا هم جدا نگه داشته می‌شه تا با پیام جدید دوباره فعال نشه. /stop همهٔ پیام‌های خودکار رو خاموش می‌کنه. زمان درخواست تست برف فقط برای محدودکردن مصرف تا یک ساعت نگه داشته می‌شه. چت و نوشتن پاسخ روی OpenRouter می‌مونه. برای عکس، توضیح درخواستی به Free.ai و مدل تصویر فرستاده می‌شه؛ برای ویس، فقط متن پاسخ به سرویس صدای OpenRouter و ارائه‌دهندهٔ مدل گفتار فرستاده می‌شه؛ اگر مدیر آگاهانه سرویس رسانه رو عوض کنه، مقصد همان سرویس انتخابی می‌شه. فایل خروجی Free.ai ممکنه تا مدتی روی آدرس عمومی سرویس در دسترس باشه و سیاست نگهداری خودش اعمال می‌شه؛ فایل ساخته‌شده به تلگرام ارسال می‌شه ولی این برنامه فایل رو ذخیره یا لاگ نمی‌کنه. ویس صدای مصنوعیه، نه صدای واقعی امیر. بودجهٔ مصرف عکس و ویس بدون متن یا فایل تا پایان روز UTC نگه داشته می‌شه؛ /reset این محدودیت مصرف رو پاک نمی‌کنه. اخبار ایران فقط با سؤال تو از خوراک عمومی ایسنا، بی‌بی‌سی فارسی، صداوسیما و فاکس‌نیوز و صفحهٔ عمومی کانال فارس دریافت می‌شه؛ متن خصوصی یا کلیدت به رسانه‌ها نمی‌ره. فقط تیتر و خلاصهٔ خبرها برای بازنویسی به OpenRouter می‌ره و از اعتبار مدیر استفاده می‌کنه؛ این خلاصه، تأیید مستقل گزارش رسانه نیست. دریافت خبرها تا یک دقیقه مشترک cache می‌شه؛ در قطع منبع، آخرین داده با برچسب ذخیره‌شده و فقط تا ۲۴ ساعت از انتشار قابل نمایشه. پیام خبری خودکار نداریم. تاریخ و روز هفته به وقت ایران از ساعت برنامه محاسبه می‌شه؛ مناسبت‌های ثابت محلی‌اند و تعطیلات از تقویم عمومی ایران گوگل، بدون شناسه یا پیام خصوصی، دریافت و مشترک ذخیره می‌شن. پاسخ تقویم از OpenRouter اعتبار مصرف نمی‌کنه و اعلان روزانهٔ تازه‌ای فعال نمی‌کنه. برای چت، عضویت در کانال @qhatel_roya با شناسهٔ تلگرام و از طریق خود تلگرام بررسی می‌شه؛ متن پیام برای کانال فرستاده نمی‌شه و نتیجهٔ عضویت دائماً ذخیره نمی‌شه. خروج از کانال، دسترسی چت و پیام‌های خودکار رو تا عضویت مجدد محدود می‌کنه. /stop و /reset و فرمان‌های حریم خصوصی بدون عضویت هم در دسترس‌اند. لطفاً اطلاعات حساس نفرست.';
 const ABOUT = `${PERSONA_GREETING}\n\n${CREATOR_REPLY}\n\n${CLOUD_PRIVACY}\n\nلغو احوال‌پرسی: /stop — فعال‌سازی دوباره: /followup\n\nاین روزها مشغول چه کاری هستی و کجاش گیر کردی؟`;
 const FAILURE = 'الان نتونستم پاسخ رو آماده یا ارسال کنم. لطفاً کمی بعد دوباره پیام بده. اگر در خطر فوری هستی، منتظر ربات نمون و با خدمات اضطراری محل یا یک فرد مطمئن تماس بگیر.';
 const ok = () => new Response('OK');
@@ -54,15 +55,17 @@ export function createWorker() {
       try { update = await readUpdate(request); }
       catch { return new Response('Invalid update', { status: 400 }); }
       if (!Number.isSafeInteger(update?.update_id)) return new Response('Invalid update', { status: 400 });
-      const message = update.message;
+      const callback = update.callback_query;
+      if (callback && (update.message || callback.data !== JOIN_CALLBACK || typeof callback.id !== 'string' || !callback.id.length || callback.id.length > 256 || (!Number.isSafeInteger(callback.message?.message_id) || callback.message.message_id <= 0))) return ok();
+      const message = callback ? { ...callback.message, from: callback.from } : update.message;
       if (!message?.from || message.from.is_bot || message.chat?.type !== 'private') return ok();
-      if (!Number.isSafeInteger(message.from.id) || !Number.isSafeInteger(message.chat.id) || message.from.id !== message.chat.id) return ok();
+      if (!Number.isSafeInteger(message.from.id) || !Number.isSafeInteger(message.chat.id) || message.from.id <= 0 || message.from.id !== message.chat.id) return ok();
       const allowed = env.TELEGRAM_ALLOWED_USER_IDS.trim();
       if (allowed !== '*' && !allowed.split(',').map(s => s.trim()).includes(String(message.from.id))) return ok();
       const objectId = env.CHATS.idFromName(String(message.from.id));
       try {
         return await env.CHATS.get(objectId).fetch('https://chat.internal/update', {
-          method: 'POST', body: JSON.stringify(update),
+          method: 'POST', body: JSON.stringify({ ...update, webhookURL: url.origin + '/webhook' }),
         });
       } catch {
         // Never log exception objects: fetch errors may contain token-bearing URLs.
@@ -82,6 +85,8 @@ export class ChatSession {
     this.ctx = ctx;
     this.env = env;
     this.queue = Promise.resolve();
+    this.membership = new MembershipGate((method, body) => this.telegram(method, body));
+    this.callbackSetupAt = 0;
     this.weather = new WeatherAssistant(ctx.storage, env, (chat, text) => this.send(chat, text), () => this.scheduleAlarm());
   }
   fetch(request) {
@@ -101,7 +106,9 @@ export class ChatSession {
         await this.ctx.storage.put('followup', followup);
         const allowed = this.env.TELEGRAM_ALLOWED_USER_IDS?.trim() || '';
         if (allowed === '*' || allowed.split(',').map(s => s.trim()).includes(String(followup.chatId))) {
-          try { await this.send(followup.chatId, FOLLOWUP_TEXT); }
+          try {
+            if (!membershipRequired(this.env) || await this.membership.check(followup.chatId) === 'member') await this.send(followup.chatId, FOLLOWUP_TEXT);
+          }
           catch { await this.disableFollowup(); } // blocked bot, unavailable API, etc.
         } else {
           await this.disableFollowup();
@@ -109,7 +116,12 @@ export class ChatSession {
       }
       const mediaUsage = await this.ctx.storage.get('mediaUsage');
       if (mediaUsage?.expiresAt <= Date.now()) await this.ctx.storage.delete('mediaUsage');
-      await this.weather.alarm();
+      const weather = await this.ctx.storage.get('weather');
+      if (weather?.alertsEnabled && weather.nextCheckAt <= Date.now() && membershipRequired(this.env) && await this.membership.check(weather.chatId) !== 'member') {
+        // Pause paid weather prose while outside the channel or Telegram is down;
+        // preserve the user's existing subscription and explicit opt-out choices.
+        await this.ctx.storage.put('weather', { ...weather, nextCheckAt: Date.now() + 60 * 60_000 });
+      } else await this.weather.alarm();
       await this.scheduleAlarm();
     });
     this.queue = task.catch(() => {});
@@ -162,10 +174,23 @@ export class ChatSession {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body), signal: AbortSignal.timeout(8000),
     });
-    if (!response.ok || !(await response.json()).ok) throw new Error('Telegram delivery failed');
+    if (!response.ok) throw new Error('Telegram delivery failed');
+    const data = await response.json();
+    if (!data.ok) throw new Error('Telegram delivery failed');
+    return data.result;
   }
   async send(chat, text) {
     for (const part of splitMessage(text)) await this.telegram('sendMessage', { chat_id: chat, text: part });
+  }
+  async showMembershipGate(chat, status) {
+    await this.telegram('sendMessage', { chat_id: chat, text: status === 'unavailable' ? JOIN_UNAVAILABLE : JOIN_TEXT,
+      reply_markup: JOIN_KEYBOARD, link_preview_options: { is_disabled: true } });
+  }
+  async prepareMembershipButtons(webhookURL) {
+    if (Date.now() - this.callbackSetupAt < 15 * 60_000) return;
+    this.callbackSetupAt = Date.now();
+    try { await enableMembershipCallbacks((method, body) => this.telegram(method, body), webhookURL, this.env.TELEGRAM_WEBHOOK_SECRET); }
+    catch { /* Membership still fails closed; /start remains a working fallback. */ }
   }
   async sendReply(chat, text) {
     const payloads = formatReply(text);
@@ -255,11 +280,28 @@ export class ChatSession {
     record.seen = [...record.seen, update.update_id].slice(-100);
     record.expiresAt = Date.now() + TTL;
     await this.persist(record);
-    const { message } = update;
+    const callback = update.callback_query;
+    const message = callback ? { ...callback.message, from: callback.from } : update.message;
     const chat = message.chat.id;
     const text = typeof message.text === 'string' ? message.text.trim() : '';
     const command = text.split(/\s/)[0].split('@')[0].toLowerCase();
     try {
+      if (callback) {
+        await this.telegram('answerCallbackQuery', { callback_query_id: callback.id }).catch(() => {});
+        const status = membershipRequired(this.env) ? await this.membership.check(chat) : 'member';
+        if (status === 'member') {
+          await this.telegram('editMessageReplyMarkup', { chat_id: chat, message_id: callback.message.message_id, reply_markup: { inline_keyboard: [] } }).catch(() => {});
+          await this.send(chat, 'عضویتت تأیید شد ✅🌱 حالا پیامت رو بفرست تا گپ بزنیم.');
+        } else await this.showMembershipGate(chat, status);
+        return ok();
+      }
+      // Privacy, cancellation and public contact remain available without joining.
+      const gateExempt = ['/stop', '/reset', '/privacy', '/about', '/help', '/weatherstop', '/forgetcity'].includes(command) || isCreatorQuestion(text);
+      if (membershipRequired(this.env) && !gateExempt) {
+        await this.prepareMembershipButtons(update.webhookURL);
+        const status = await this.membership.check(chat);
+        if (status !== 'member') { await this.showMembershipGate(chat, status); return ok(); }
+      }
       if (command === '/reset' || command === '/start') {
         if (command === '/reset') {
           await this.disableFollowup();

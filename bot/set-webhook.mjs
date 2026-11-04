@@ -25,7 +25,7 @@ try {
   await call('setWebhook', {
     url: new URL('/webhook', base).href,
     secret_token: secret,
-    allowed_updates: ['message'],
+    allowed_updates: ['message', 'callback_query'],
     max_connections: 1,
     drop_pending_updates: false,
   });
