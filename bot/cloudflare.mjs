@@ -3,7 +3,7 @@ import { handleSetup } from './setup.mjs';
 import { formatReply } from './format.mjs';
 import { WeatherAssistant, nextWeatherWake } from './weather-assistant.mjs';
 import { isMarketQuestion, isWeatherQuestion } from './live-data.mjs';
-import { isNewsQuestion, newsReply, NEWS_UNAVAILABLE } from './news.mjs';
+import { isNewsQuestion, newsReply, newsFailureMessage, NEWS_UNAVAILABLE } from './news.mjs';
 import { parseMediaRequest, validateMediaConfiguration, PERSONAL_MEDIA_LIMITS, nextMediaDay, generateImage, generateSpeech, uploadMedia, mediaFailureMessage } from './media.mjs';
 
 const TTL = 30 * 60_000;
@@ -323,7 +323,12 @@ export class ChatSession {
           await this.send(chat, NEWS_UNAVAILABLE);
           return ok();
         }
-        const html = await newsReply(this.env, items, newsMetadata);
+        let html;
+        try { html = await newsReply(this.env, items, newsMetadata); }
+        catch (error) {
+          await this.send(chat, newsFailureMessage(error));
+          return ok();
+        }
         await this.telegram('sendMessage', { chat_id: chat, text: html, parse_mode: 'HTML', link_preview_options: { is_disabled: true } });
         record.messages = [...record.messages, { role: 'user', content: text },
           { role: 'assistant', content: html.replace(/<[^>]*>/g, '') }].slice(-HISTORY_LIMIT);

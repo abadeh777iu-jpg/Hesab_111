@@ -125,3 +125,16 @@ test('Iran news task explicitly translates English coverage into Persian and pre
     return Response.json({ choices: [{ message: { content: '[{"id":1,"text":"طبق گزارش فاکس، یک مقام چنین ادعایی کرده."}]' } }] });
   } });
 });
+
+test('news task asks for a connected friend-like story, never mandatory JSON or headline lists', async () => {
+  await complete({ apiKey: 'key', model: 'model', messages: [], newsItems: [{ id: 1, title: 'خبر ساختگی ایران', excerpt: 'فقط دادهٔ آزمون', source: 'ایسنا' }], fetchImpl: async (url, options) => {
+    const body = JSON.parse(options.body);
+    const prompt = body.messages[0].content;
+    assert.ok(prompt.includes('گپ پیوسته'));
+    assert.ok(prompt.includes('صرفاً تیترها را ردیف یا کپی نکن'));
+    assert.ok(prompt.includes('JSON، کد یا برچسب تولید نکن'));
+    assert.ok(!prompt.includes('خروجی فقط آرایه JSON'));
+    assert.equal(body.max_tokens, 320);
+    return Response.json({ choices: [{ message: { content: 'راستی، ایسنا یه خبر آزمایشی از ایران داره.' } }] });
+  } });
+});

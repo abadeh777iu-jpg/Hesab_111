@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { isNewsQuestion, parseNewsFeed, selectNews, NEWS_SOURCES, NewsFeedHandler, newsReply, NEWS_CACHE_MS, NEWS_MAX_AGE, parseFarsPage } from './news.mjs';
+import { isNewsQuestion, parseNewsFeed, selectNews, NEWS_SOURCES, NewsFeedHandler, newsReply, NEWS_CACHE_MS, NEWS_MAX_AGE, parseFarsPage, newsFailureMessage, NewsRewriteError } from './news.mjs';
 
 const now = Date.parse('2026-11-04T12:00:00Z');
 const [isna, bbc] = NEWS_SOURCES;
@@ -129,27 +129,31 @@ test('news rewriting sends public excerpts only, isolates private history, keeps
   assert.ok(html.includes('ایسنا نوشته'));
   assert.ok(html.includes('href="https://www.isna.ir/news/123/test"'));
   assert.ok(html.includes('href="https://www.bbc.com/persian/articles/test"'));
-  assert.ok(html.includes('دریافت خبرها'));
-  assert.ok(html.includes('روایت رسانه‌هاست'));
+  assert.ok(html.includes('منبع‌ها'));
+  assert.ok(!html.includes('دریافت خبرها'));
 });
 
-test('model errors, malformed/truncated summaries and injected links fall back to source titles without paid retries', async () => {
+test('model errors and invalid summaries produce a safe actionable error, never a pretend headline summary or paid retry', async () => {
   for (const output of ['bad JSON', '[{"id":1,"text":"partial"}', JSON.stringify([{ id: 1, text: 'https://evil.test' }]), JSON.stringify([{ id: 99, text: 'wrong id' }]), JSON.stringify([{ id: 1, text: '' }]), 'HTTP402']) {
     let calls = 0;
-    const html = await newsReply({ OPENROUTER_API_KEY: 'key', OPENROUTER_MODEL: 'model', fetchImpl: async () => {
+    await assert.rejects(newsReply({ OPENROUTER_API_KEY: 'key', OPENROUTER_MODEL: 'model', fetchImpl: async () => {
       calls++;
       if (output === 'HTTP402') return new Response('secret error body', { status: 402 });
       return Response.json({ choices: [{ message: { content: output } }] });
-    } }, [article(isna, { title: 'خبر <b>آزمایشی</b> & ایران' })], { stale: true });
+    } }, [article(isna, { title: 'خبر <b>آزمایشی</b> & ایران' })], { stale: true }), error => {
+      assert.ok(error instanceof NewsRewriteError);
+      assert.equal(error.code, output === 'HTTP402' ? 'HTTP_402' : 'FORMAT');
+      const message = newsFailureMessage(error);
+      assert.ok(message.includes('NEWS_'));
+      assert.ok(!message.includes('تیترهای تازه'));
+      assert.ok(!message.includes('آزمایشی'));
+      assert.ok(!message.includes('secret error body'));
+      assert.ok(!message.includes('evil.test'));
+      return true;
+    });
     assert.equal(calls, 1);
-    assert.ok(html.includes('تیترهای تازه'));
-    assert.ok(html.includes('&lt;b&gt;'));
-    assert.ok(html.includes('ذخیره‌شده'));
-    assert.ok(!html.includes('secret error body'));
-    assert.ok(!html.includes('evil.test'));
   }
 });
-
 
 test('one exact JSON code fence from a compatible model is accepted without a second request', async () => {
   let calls = 0;
@@ -242,15 +246,48 @@ test('large Fox RSS has a source-specific one-MiB bound, not an unbounded or glo
   assert.throws(() => parseNewsFeed('x'.repeat(1024 * 1024 + 1), fox, now));
 });
 
-test('without model credit, Fox falls back to its attributed original English title without inventing a translation', async () => {
+test('without model credit, Fox translation fails honestly instead of replacing a friendly Persian story with English headlines', async () => {
+  let calls = 0;
+  await assert.rejects(newsReply({ OPENROUTER_API_KEY: 'key', OPENROUTER_MODEL: 'model', fetchImpl: async () => {
+    calls++;
+    return new Response('private billing rejection', { status: 402 });
+  } }, [article(fox, { title: 'Iran test report', description: 'An attributed claim.', url: 'https://www.foxnews.com/world/iran-test' })]), error => {
+    assert.equal(error.code, 'HTTP_402');
+    const message = newsFailureMessage(error);
+    assert.ok(message.includes('OpenRouter'));
+    assert.ok(message.includes('NEWS_HTTP_402'));
+    assert.ok(!message.includes('Iran test report'));
+    assert.ok(!message.includes('private billing rejection'));
+    return true;
+  });
+  assert.equal(calls, 1);
+});
+
+test('a normal friendly Persian narrative is accepted directly, even beyond the old 280-character limit', async () => {
+  const story = 'راستی، ایسنا نوشته یه طرح آزمایشی تو ایران مطرح شده، ولی هنوز نتیجه‌ای ازش اعلام نکرده. از اون طرف، فاکس به نقل از یه مقام دربارهٔ ایران گزارشی داده؛ حرف اون مقامه، نه چیزی که جداگانه تأیید شده باشه. ' + 'این توضیح ساختگی فقط برای آزمون لحن و پذیرش پاسخ پیوسته است. '.repeat(3);
+  assert.ok(story.length > 280);
   let calls = 0;
   const html = await newsReply({ OPENROUTER_API_KEY: 'key', OPENROUTER_MODEL: 'model', fetchImpl: async () => {
     calls++;
-    return new Response('private billing rejection', { status: 402 });
-  } }, [article(fox, { title: 'Iran test report', description: 'An attributed claim.', url: 'https://www.foxnews.com/world/iran-test' })]);
+    return Response.json({ choices: [{ message: { content: story } }] });
+  } }, [article(isna), article(fox, { title: 'Iran synthetic test report', url: 'https://www.foxnews.com/world/test' })]);
   assert.equal(calls, 1);
-  assert.ok(html.includes('Iran test report'));
-  assert.ok(html.includes('فاکس‌نیوز'));
-  assert.ok(html.includes('https://www.foxnews.com/world/iran-test'));
-  assert.ok(!html.includes('private billing rejection'));
+  assert.ok(html.startsWith('راستی، ایسنا نوشته'));
+  assert.ok(html.includes('از اون طرف'));
+  assert.ok(html.includes('منبع‌ها'));
+  assert.ok(!html.includes('تیتر آزمایشی ایران'));
+  assert.ok(!html.includes('خلاصه‌شون کنم'));
+  assert.equal(html.split('\n\n').length, 2);
+});
+
+test('rewrite failure categories never echo upstream errors, tokens or URLs', async () => {
+  for (const [failure, expected] of [[new DOMException('secret URL', 'TimeoutError'), 'TIMEOUT'], [new Error('https://secret.test?api_key=private'), 'CONNECTION']]) {
+    await assert.rejects(newsReply({ fetchImpl: async () => { throw failure; } }, [article(isna)]), error => {
+      assert.equal(error.code, expected);
+      assert.ok(!newsFailureMessage(error).includes('secret'));
+      assert.ok(!newsFailureMessage(error).includes('private'));
+      return true;
+    });
+  }
+  await assert.rejects(newsReply({ fetchImpl: async () => Response.json({ choices: [{ message: { content: '' } }] }) }, [article(isna)]), { code: 'EMPTY' });
 });

@@ -8,7 +8,7 @@ import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
 // Every outbound URL is intercepted by a local fake: no paid or live requests.
 test('Workers news runtime fetches fixed RSS, parses XML, rewrites once and uploads safe attributed Telegram text', async t => {
   const bundle = await build({ stdin: { resolveDir: fileURLToPath(new URL('.', import.meta.url)), contents: `
-    import { NewsFeedHandler, newsReply, NEWS_SOURCES } from './news.mjs';
+    import { NewsFeedHandler, newsReply, newsFailureMessage, NEWS_SOURCES } from './news.mjs';
     export default { async fetch(request, bindings) {
       const path = new URL(request.url).pathname;
       const badModel = path === '/model-error';
@@ -22,7 +22,9 @@ test('Workers news runtime fetches fixed RSS, parses XML, rewrites once and uplo
       const { items, ...metadata } = await response.json();
       if (only) return Response.json({ ok: response.ok && concurrent.ok, items });
       if (!response.ok || !concurrent.ok || items.length !== 2) return Response.json({ ok: false });
-      const html = await newsReply(env, items, metadata);
+      let html;
+      try { html = await newsReply(env, items, metadata); }
+      catch (error) { return Response.json({ ok: false, code: error.code, message: newsFailureMessage(error) }); }
       const delivered = await bindings.UPSTREAM.fetch('https://api.telegram.org/botfake-token/sendMessage', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ chat_id: 42, text: html, parse_mode: 'HTML', link_preview_options: { is_disabled: true } }) });
@@ -53,7 +55,7 @@ test('Workers news runtime fetches fixed RSS, parses XML, rewrites once and uplo
           if (body.model === 'bad-model') return new Response('private provider rejection', { status: 402 });
           if (body.max_tokens !== 320 || body.messages.length !== 2) return new Response('Bad body', { status: 400 });
           const items = JSON.parse(body.messages[1].content).untrusted_news_reports;
-          return Response.json({ choices: [{ message: { content: JSON.stringify(items.map(item => ({ id: item.id, text: item.source + ' یه خبر آزمایشی از ایران داره.' }))) } }] });
+          return Response.json({ choices: [{ message: { content: 'راستی، ' + items.map(item => item.source + ' یه خبر آزمایشی از ایران داره.').join(' از اون طرف، ') } }] });
         }
         if (url.hostname === 'api.telegram.org') {
           const body = await request.json();
@@ -71,8 +73,10 @@ test('Workers news runtime fetches fixed RSS, parses XML, rewrites once and uplo
   assert.equal(success.ok, true);
   assert.ok(success.html.includes('یه خبر آزمایشی'));
   const fallback = await (await mf.dispatchFetch('https://runtime.test/model-error')).json();
-  assert.equal(fallback.ok, true);
-  assert.ok(fallback.html.includes('تیترهای تازه'));
+  assert.equal(fallback.ok, false);
+  assert.equal(fallback.code, 'HTTP_402');
+  assert.ok(fallback.message.includes('NEWS_HTTP_402'));
+  assert.ok(!fallback.message.includes('private provider rejection'));
   for (const sourceId of ['fars', 'irib', 'fox']) {
     const isolated = await (await mf.dispatchFetch('https://runtime.test/only-' + sourceId)).json();
     assert.equal(isolated.ok, true, sourceId);

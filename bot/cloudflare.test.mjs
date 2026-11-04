@@ -882,7 +882,7 @@ test('چه خبر uses shared Iran news, one isolated rewrite and attributed lin
   env.fetchImpl = async (url, options) => {
     if (url.includes('openrouter.ai')) {
       calls.push({ url, body: JSON.parse(options.body) });
-      return Response.json({ choices: [{ message: { content: '[{"id":1,"text":"ایسنا یه خبر تازه درباره ایران نوشته."}]' } }] });
+      return Response.json({ choices: [{ message: { content: 'راستی، ایسنا یه خبر تازه درباره ایران نوشته.' } }] });
     }
     return original(url, options);
   };
@@ -912,4 +912,29 @@ test('unavailable fresh news returns honest casual notice with no model charge o
   await createWorker().fetch(request(update(1, 'اخبار ایران')), env);
   assert.equal(calls.filter(call => call.url.includes('openrouter.ai')).length, 0);
   assert.ok(calls.at(-1).body.text.includes('نمی‌خوام از خودم'));
+});
+
+test('rewrite billing error is actionable, does not replace news with headlines, and leaves conversation history intact', async () => {
+  const { env, calls, state } = setup();
+  const history = [{ role: 'user', content: 'private conversation' }, { role: 'assistant', content: 'previous answer' }];
+  state.set('session', { messages: history, seen: [], lastAt: 0, introduced: true, expiresAt: Date.now() + 60_000 });
+  env.MARKETS = { idFromName: name => name, get: () => ({ fetch: async () => Response.json({ items: [{ title: 'raw headline must not be sent', description: 'source excerpt', source: 'ایسنا', sourceId: 'isna', url: 'https://www.isna.ir/news/123/test', publishedAt: Date.now() - 60_000 }] }) }) };
+  const original = env.fetchImpl;
+  env.fetchImpl = async (url, options) => {
+    if (url.includes('openrouter.ai')) {
+      calls.push({ url, body: JSON.parse(options.body) });
+      return new Response('secret billing body key-token', { status: 402 });
+    }
+    return original(url, options);
+  };
+  const worker = createWorker();
+  await worker.fetch(request(update(1, 'چه خبر؟')), env);
+  assert.equal(calls.filter(call => call.url.includes('openrouter.ai')).length, 1);
+  assert.ok(calls.at(-1).body.text.includes('NEWS_HTTP_402'));
+  assert.ok(calls.at(-1).body.text.includes('OpenRouter'));
+  assert.ok(!calls.at(-1).body.text.includes('raw headline'));
+  assert.ok(!calls.at(-1).body.text.includes('secret billing'));
+  assert.deepEqual(state.get('session').messages, history);
+  await worker.fetch(request(update(1, 'چه خبر؟')), env);
+  assert.equal(calls.filter(call => call.url.includes('openrouter.ai')).length, 1);
 });

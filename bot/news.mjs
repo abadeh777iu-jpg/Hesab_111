@@ -209,24 +209,55 @@ export class NewsFeedHandler {
   }
 }
 
+export class NewsRewriteError extends Error {
+  constructor(code) { super('News rewrite failed'); this.code = code; }
+}
+
+export function newsFailureMessage(error) {
+  const code = error instanceof NewsRewriteError && /^(?:HTTP_[1-5][0-9]{2}|TIMEOUT|EMPTY|FORMAT|CONNECTION)$/.test(error.code) ? error.code : 'CONNECTION';
+  const explanation = code === 'HTTP_402' ? 'خبرها رسیدن، ولی اعتبار یا سقف خرج کلید OpenRouter اجازهٔ تعریف‌کردنشون رو نداد؛ مدیر باید موجودی و محدودیت کلید رو بررسی کنه.'
+    : ['HTTP_401', 'HTTP_403'].includes(code) ? 'خبرها رسیدن، ولی OpenRouter کلید یا دسترسی مدل رو قبول نکرد؛ مدیر باید تنظیماتش رو بررسی کنه.'
+    : code === 'HTTP_429' ? 'خبرها رسیدن، ولی مدل فعلاً درخواست‌ها رو محدود کرده.'
+    : code === 'TIMEOUT' ? 'خبرها رسیدن، ولی جواب مدل به‌موقع نرسید.'
+    : ['FORMAT', 'EMPTY'].includes(code) ? 'خبرها رسیدن، ولی مدل جواب قابل‌استفاده برای تعریف‌کردنشون نداد.'
+    : 'خبرها رسیدن، ولی تعریف‌کردنشون با مدل انجام نشد.';
+  return `${explanation} 🌱\nکد بررسی: NEWS_${code}`;
+}
+
+function newsNarrative(text, count) {
+  let payload = text.trim().replace(/^```(?:json|text)?\s*\n?([\s\S]*?)\n?```$/i, '$1');
+  // Accept older JSON-style replies too, but never require that format. Most
+  // importantly, a normal conversational answer must not become raw headlines.
+  if (/^[\[{]/.test(payload)) {
+    try {
+      const parsed = JSON.parse(payload);
+      if (!Array.isArray(parsed) || parsed.length !== count || parsed.some((item, index) =>
+        item?.id !== index + 1 || typeof item.text !== 'string' || !item.text.trim())) throw new Error('Shape');
+      payload = parsed.map(item => item.text).join(' ');
+    } catch { throw new NewsRewriteError('FORMAT'); }
+  }
+  if (payload.length > 1800 || /https?:|www\.|t\.me\/|\[OPINION\]/i.test(payload)) throw new NewsRewriteError('FORMAT');
+  const narrative = plain(payload.replace(/\*\*/g, ''), 1800);
+  if (!narrative || !/[آ-غف-يپچژکگی]/u.test(narrative)) throw new NewsRewriteError('FORMAT');
+  return narrative;
+}
+
 export async function newsReply(env, items, metadata = {}) {
-  let summaries = null;
+  let text;
   try {
-    const text = await complete({ apiKey: env.OPENROUTER_API_KEY, model: env.OPENROUTER_MODEL,
+    text = await complete({ apiKey: env.OPENROUTER_API_KEY, model: env.OPENROUTER_MODEL,
       style: env.BOT_STYLE, messages: [], newsItems: items.map((item, index) => ({ id: index + 1,
         title: item.title, excerpt: item.description, source: item.source })),
-      fetchImpl: env.fetchImpl || fetch, timeoutMs: 12_000 });
-    // Some compatible chat models wrap otherwise valid JSON in one code fence.
-    const payload = text.trim().replace(/^```(?:json)?\s*\n?([\s\S]*?)\n?```$/i, '$1');
-    const parsed = JSON.parse(payload);
-    if (!Array.isArray(parsed) || parsed.length !== items.length || parsed.some((item, index) =>
-      item?.id !== index + 1 || typeof item.text !== 'string' || !item.text.trim() || item.text.length > 280 || /https?:|www\.|\[OPINION\]/i.test(item.text))) throw new Error('Invalid news summary');
-    summaries = parsed.map(item => plain(item.text, 280));
-    if (summaries.some(text => !text)) throw new Error('Empty news summary');
-  } catch { /* No paid retries; show attributed source headlines, not invented news. */ }
-  const cacheNotice = metadata.stale ? 'منبع‌ها الان خبر تازه ندادن؛ اینا آخرین خبرهای ذخیره‌شده‌ان:\n\n' : '';
-  const intro = summaries ? '' : 'الان نتونستم خودمونی خلاصه‌شون کنم؛ اینا تیترهای تازهٔ منبع‌هان:\n\n';
-  const parts = items.map((item, index) => `${escapeHtml(summaries ? summaries[index] : item.title)}\n<a href="${escapeHtml(item.url)}">${escapeHtml(item.source)}</a> · ${escapeHtml(localTime(item.publishedAt, 'Asia/Tehran'))}`);
-  const fetched = Number.isFinite(metadata.fetchedAt) ? `\nدریافت خبرها: ${escapeHtml(localTime(metadata.fetchedAt, 'Asia/Tehran'))}` : '';
-  return `${cacheNotice}${intro}${parts.join('\n\n')}${fetched}\n\nروایت رسانه‌هاست؛ برای جزئیات، لینک‌ها رو ببین. ساعت‌ها به وقت تهرانه.`;
+      fetchImpl: env.fetchImpl || fetch, timeoutMs: 20_000 });
+  } catch (error) {
+    const status = /^OpenRouter HTTP ([1-5][0-9]{2})$/.exec(error?.message || '');
+    throw new NewsRewriteError(status ? `HTTP_${status[1]}`
+      : ['TimeoutError', 'AbortError'].includes(error?.name) ? 'TIMEOUT'
+      : error?.message === 'OpenRouter empty response' ? 'EMPTY'
+      : error instanceof SyntaxError ? 'FORMAT' : 'CONNECTION');
+  }
+  const narrative = newsNarrative(text, items.length);
+  const cacheNotice = metadata.stale ? 'اینا آخرین خبرهای ذخیره‌شده‌ان، نه خبر لحظه‌ای:\n' : '';
+  const sources = items.map(item => `<a href="${escapeHtml(item.url)}">${escapeHtml(item.source)}</a> (${escapeHtml(localTime(item.publishedAt, 'Asia/Tehran'))})`);
+  return `${cacheNotice}${escapeHtml(narrative)}\n\nمنبع‌ها، به وقت تهران: ${sources.join(' · ')}`;
 }
