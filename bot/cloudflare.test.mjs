@@ -1102,3 +1102,123 @@ test('nonmember alarms do not send check-ins or incur weather/model costs, while
   assert.equal(f.state.has('weatherOptOut'), false);
   assert.equal(f.calls.filter(c => c.url.includes('sendMessage') || c.url.includes('openrouter.ai') || c.url.includes('open-meteo')).length, 0);
 });
+
+async function withInstagram() {
+  const { InstagramFeedHandler } = await import('./instagram.mjs');
+  const f = setup(); const publicState = new Map(); const original = f.env.fetchImpl;
+  f.videoURL = 'https://instagram.ftia13-1.fna.fbcdn.net/video.mp4?sig=test';
+  f.env.fetchImpl = async (url, options) => {
+    if (url.includes('vxinstagram.com')) {
+      f.calls.push({ url, body: null });
+      return new Response(`<video><source src="${f.videoURL}" type="video/mp4"></video>`, { headers: { 'Content-Type': 'text/html' } });
+    }
+    if (url.includes('.fbcdn.net')) {
+      f.calls.push({ url, body: null });
+      return new Response(new Uint8Array([0, 0, 0, 16, 102, 116, 121, 112, 105, 115, 111, 109, 0, 0, 0, 0]), { headers: { 'Content-Type': 'video/mp4' } });
+    }
+    if (url.includes('songfinder.dev')) {
+      f.calls.push({ url, body: Object.fromEntries(options.body.entries()) });
+      return Response.json({ code: 0, data: { matched: true, title: 'Fixture song', artist: 'Fixture artist', spotifyUrl: 'https://open.spotify.com/track/123' } });
+    }
+    if (url.endsWith('/sendVideo')) {
+      const body = options.body; f.lastToken = JSON.parse(body.get('reply_markup')).inline_keyboard[0][0].callback_data;
+      f.calls.push({ url, body: { caption: body.get('caption'), markup: JSON.parse(body.get('reply_markup')), file: body.get('video') } });
+      return Response.json({ ok: true, result: { message_id: 777, video: { file_id: 'fixture-video' } } });
+    }
+    if (url.endsWith('/getWebhookInfo')) return Response.json({ ok: true, result: { url: 'https://example.workers.dev/webhook', allowed_updates: ['message', 'callback_query'] } });
+    return original(url, options);
+  };
+  const feed = new InstagramFeedHandler({ storage: { get: async k => structuredClone(publicState.get(k)), put: async (k, v) => publicState.set(k, structuredClone(v)) } }, f.env);
+  f.env.MARKETS = { idFromName: name => { assert.equal(name, 'instagram-free'); return name; }, get: () => ({ fetch: (url, options) => feed.fetch(new Request(url, options)) }) };
+  f.callback = (id = 2) => { const body = joinCallback(id); body.callback_query.data = f.lastToken; body.callback_query.message.message_id = 777; return body; };
+  return f;
+}
+
+test('Instagram public link uploads actual video with music button, stripping tracking, and does not consume model/media credits or enroll alerts', async () => {
+  const f = await withInstagram();
+  await createWorker().fetch(request(update(1, 'https://www.instagram.com/reel/DfUr8XJoNJC/?exln=secret-tracking')), f.env);
+  const sent = f.calls.find(c => c.url.endsWith('/sendVideo'));
+  assert.ok(sent.body.file instanceof Blob); assert.ok(sent.body.markup.inline_keyboard[0][0].callback_data.startsWith('igmusic:'));
+  assert.ok(!sent.body.caption.includes('secret-tracking'));
+  assert.equal(f.calls.filter(c => c.url.includes('songfinder') || c.url.includes('openrouter')).length, 0);
+  assert.equal(f.state.get('instagramUsage').video, 1);
+  for (const key of ['mediaUsage', 'followup', 'weather']) assert.equal(f.state.has(key), false);
+  assert.equal(f.state.get('session').instagramJobs[0].messageId, 777);
+  assert.equal(f.state.get('session').messages.length, 0);
+});
+
+test('music callback recognizes only a stored video for its own chat/message and replays cause no duplicate recognition', async () => {
+  const f = await withInstagram(); const worker = createWorker();
+  await worker.fetch(request(update(1, 'https://www.instagram.com/reel/DfUr8XJoNJC/')), f.env);
+  await worker.fetch(request(f.callback()), f.env);
+  assert.equal(f.calls.filter(c => c.url.includes('songfinder')).length, 1);
+  assert.ok(f.calls.at(-1).body.text.includes('Fixture song'));
+  assert.ok(f.calls.at(-1).body.text.includes('https://open.spotify.com/track/123'));
+  const length = f.calls.length; await worker.fetch(request(f.callback()), f.env); assert.equal(f.calls.length, length);
+  await worker.fetch(request(f.callback(3)), f.env);
+  assert.equal(f.calls.filter(c => c.url.includes('songfinder')).length, 1);
+  assert.ok(f.calls.at(-1).body.text.includes('نتیجهٔ تلاش قبلی'));
+  assert.equal(f.calls.filter(c => c.url.includes('openrouter')).length, 0);
+  assert.equal(f.state.get('instagramUsage').music, 1);
+});
+
+test('unknown, wrong-message, cross-chat and expired music buttons cannot request music recognition', async t => {
+  let now = Date.now(); t.mock.method(Date, 'now', () => now);
+  const f = await withInstagram(); const worker = createWorker();
+  await worker.fetch(request(update(1, 'https://www.instagram.com/reel/DfUr8XJoNJC/')), f.env);
+  const wrong = f.callback(2); wrong.callback_query.message.message_id = 888;
+  await worker.fetch(request(wrong), f.env);
+  assert.ok(f.calls.at(-1).body.text.includes('منقضی یا نامعتبر'));
+  const unknown = f.callback(3); unknown.callback_query.data = 'igmusic:' + 'f'.repeat(32); await worker.fetch(request(unknown), f.env);
+  const cross = f.callback(4); cross.callback_query.from.id = 99; await worker.fetch(request(cross), f.env);
+  now += 31 * 60000; await worker.fetch(request(f.callback(5)), f.env);
+  assert.equal(f.calls.filter(c => c.url.includes('songfinder')).length, 0);
+});
+
+test('Instagram quota survives reset and partial failures; quota cleanup remains scheduled without retaining video files', async t => {
+  let now = Date.now(); t.mock.method(Date, 'now', () => now);
+  const f = await withInstagram(); const worker = createWorker();
+  for (let i = 1; i <= 5; i++) { now += 11000; await worker.fetch(request(update(i, 'https://www.instagram.com/reel/DfUr8XJoNJC/')), f.env); }
+  assert.equal(f.state.get('instagramUsage').video, 5);
+  await worker.fetch(request(update(6, '/reset')), f.env);
+  assert.deepEqual(f.state.get('session').instagramJobs, []);
+  assert.equal(f.state.get('instagramUsage').video, 5);
+  now += 11000; await worker.fetch(request(update(7, 'https://www.instagram.com/reel/DfUr8XJoNJC/')), f.env);
+  assert.ok(f.calls.at(-1).body.text.includes('سقف رایگان'));
+  assert.equal(f.calls.filter(c => c.url.endsWith('/sendVideo')).length, 5);
+  assert.ok(f.alarmAt() > now);
+  now = f.state.get('instagramUsage').expiresAt + 1; await f.session.alarm();
+  assert.equal(f.state.has('instagramUsage'), false);
+});
+
+test('Instagram links and music callbacks remain subject to channel membership, including leaving after download', async () => {
+  const f = withMembership();
+  await createWorker().fetch(request(update(1, 'https://www.instagram.com/reel/DfUr8XJoNJC/')), f.env);
+  assert.ok(f.calls.at(-1).body.reply_markup.inline_keyboard[0][0].url.includes('qhatel_roya'));
+  const callback = joinCallback(2); callback.callback_query.data = 'igmusic:' + 'a'.repeat(32);
+  await createWorker().fetch(request(callback), f.env);
+  assert.ok(f.calls.at(-1).body.reply_markup.inline_keyboard[0][0].url.includes('qhatel_roya'));
+  assert.ok(f.calls.every(c => c.url.includes('api.telegram.org')));
+});
+
+test('expired Instagram callback URLs are purged by an alarm even while the normal chat session is still active', async t => {
+  let now = Date.now(); t.mock.method(Date, 'now', () => now);
+  const f = await withInstagram();
+  await createWorker().fetch(request(update(1, 'https://www.instagram.com/reel/DfUr8XJoNJC/')), f.env);
+  const record = f.state.get('session'), end = record.instagramJobs[0].expiresAt;
+  record.expiresAt = end + 60000; f.state.set('session', record);
+  await f.session.scheduleAlarm(); assert.equal(f.alarmAt(), end);
+  now = end + 1; await f.session.alarm();
+  assert.deepEqual(f.state.get('session').instagramJobs, []);
+  assert.equal(f.alarmAt(), end + 60000);
+});
+
+test('Instagram failures consume only the independent attempt budget and hide private upstream errors', async () => {
+  const f = await withInstagram();
+  f.env.MARKETS = { idFromName: name => name, get: () => ({ fetch: async () => { throw new Error('private-token-source-error'); } }) };
+  await createWorker().fetch(request(update(1, 'https://www.instagram.com/reel/DfUr8XJoNJC/')), f.env);
+  assert.equal(f.state.get('instagramUsage').video, 1);
+  assert.equal(f.calls.filter(c => c.url.includes('openrouter') || c.url.endsWith('/sendVideo')).length, 0);
+  assert.ok(!f.calls.at(-1).body.text.includes('private-token'));
+  assert.equal(f.state.has('mediaUsage'), false);
+});

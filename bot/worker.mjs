@@ -1,3 +1,4 @@
+import { InstagramFeedHandler } from './instagram.mjs';
 import { DurableObject } from 'cloudflare:workers';
 import worker, { ChatSession as SessionHandler } from './cloudflare.mjs';
 import { MarketFeedHandler } from './live-data.mjs';
@@ -22,9 +23,11 @@ export class MarketFeed extends DurableObject {
     this.handler = new MarketFeedHandler(ctx, env);
     this.news = new NewsFeedHandler(ctx, env);
     this.calendar = new CalendarFeedHandler(ctx, env);
+    this.instagram = new InstagramFeedHandler(ctx, env);
   }
   fetch(request) {
     const path = new URL(request.url).pathname;
+    if (path === '/ig-resolve' || path === '/ig-recognize') return this.instagram.fetch(request);
     if (path === '/calendar') return this.calendar.fetch();
     return path === '/news' ? this.news.fetch() : this.handler.fetch(request);
   }

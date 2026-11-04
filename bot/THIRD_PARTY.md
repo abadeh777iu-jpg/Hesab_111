@@ -24,3 +24,8 @@ News parsing uses pinned `fast-xml-parser` **5.12.0** (MIT), with its dependency
 ## Public channel HTML parsing
 
 Fars' anonymous public channel page is parsed with pinned `htmlparser2` **12.0.0** (MIT), not evaluated as browser code. Source: https://github.com/fb55/htmlparser2 . The MIT notice is retained in `licenses/htmlparser2-MIT.txt`; transitive dependency versions are locked in `package-lock.json`, with their license files in installed npm packages. No cookies, browser automation, Telegram account session or login bypass are used. A bounded DOM walk reads original post text, the post's own timestamp and its permalink only.
+
+
+## Public Instagram/music HTTP services
+
+The Cloudflare Instagram feature independently implements a bounded HTTP client for public vxInstagram embeds (https://github.com/Lainmode/InstagramEmbed-vxinstagram) and the published no-key SongFinder recognition contract (https://github.com/songfinder-dev/songfinder/blob/main/js/src/client.ts). No upstream implementation code or media is vendored. Runtime attribution and disclosure are shown in the video caption and recognition reply. Availability, fair-use limits and provider policies remain external; see [INSTAGRAM.md](INSTAGRAM.md).
