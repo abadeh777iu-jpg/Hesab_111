@@ -869,3 +869,47 @@ test('incompatible Gemini voice override is rejected before any chat charge or m
   assert.equal(budgetState.size, 0);
   assert.ok(calls.at(-1).body.text.includes('سازگار نیست'));
 });
+
+test('چه خبر uses shared Iran news, one isolated rewrite and attributed links without touching media or prices', async () => {
+  const { env, calls, state } = setup();
+  state.set('session', { messages: [{ role: 'user', content: 'private-history-must-not-go-to-news' }], seen: [], lastAt: 0, introduced: true, expiresAt: Date.now() + 60_000 });
+  let feedCalls = 0;
+  env.MARKETS = { idFromName: name => { assert.equal(name, 'iran-news'); return name; }, get: () => ({ fetch: async url => {
+    feedCalls++; assert.equal(url, 'https://market.internal/news');
+    return Response.json({ items: [{ title: 'خبر آزمایشی ایران', description: 'شرح آزمایشی ایران', source: 'ایسنا', sourceId: 'isna', url: 'https://www.isna.ir/news/123/test', publishedAt: Date.now() - 60_000 }], fetchedAt: Date.now() });
+  } }) };
+  const original = env.fetchImpl;
+  env.fetchImpl = async (url, options) => {
+    if (url.includes('openrouter.ai')) {
+      calls.push({ url, body: JSON.parse(options.body) });
+      return Response.json({ choices: [{ message: { content: '[{"id":1,"text":"ایسنا یه خبر تازه درباره ایران نوشته."}]' } }] });
+    }
+    return original(url, options);
+  };
+  await createWorker().fetch(request(update(1, 'چه خبر؟')), env);
+  assert.equal(feedCalls, 1);
+  const model = calls.filter(call => call.url.includes('openrouter.ai'));
+  assert.equal(model.length, 1);
+  assert.ok(!JSON.stringify(model).includes('private-history-must-not-go-to-news'));
+  const reply = calls.at(-1).body;
+  assert.equal(reply.parse_mode, 'HTML');
+  assert.ok(reply.text.includes('ایسنا یه خبر تازه'));
+  assert.ok(reply.text.includes('https://www.isna.ir/news/123/test'));
+  assert.deepEqual(reply.link_preview_options, { is_disabled: true });
+  assert.equal(state.has('mediaUsage'), false);
+  assert.equal(state.has('followup'), false);
+  assert.ok(state.get('session').messages.length <= 30);
+  await createWorker().fetch(request(update(1, 'چه خبر؟')), env);
+  assert.equal(feedCalls, 1);
+  await createWorker().fetch(request(update(2, '/news')), env);
+  assert.equal(feedCalls, 1);
+  assert.equal(calls.filter(call => call.url.includes('openrouter.ai')).length, 1);
+});
+
+test('unavailable fresh news returns honest casual notice with no model charge or generic hallucinated answer', async () => {
+  const { env, calls } = setup();
+  env.MARKETS = { idFromName: name => name, get: () => ({ fetch: async () => Response.json({ items: [] }, { status: 503 }) }) };
+  await createWorker().fetch(request(update(1, 'اخبار ایران')), env);
+  assert.equal(calls.filter(call => call.url.includes('openrouter.ai')).length, 0);
+  assert.ok(calls.at(-1).body.text.includes('نمی‌خوام از خودم'));
+});

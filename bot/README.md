@@ -1,5 +1,7 @@
 # ربات تلگرامِ هم‌صحبت با OpenRouter
 
+**«چه خبر؟» و اخبار ایران (فقط Cloudflare):** [NEWS.md](NEWS.md) — خبرهای RSS با منبع و زمان، بازنویسی رفیقانه با اعتبار فعلی OpenRouter؛ بدون کلید تازه.
+
 **قیمت دلار و طلا، هوا و هشدار بارش:** [INTERNET.md](INTERNET.md) — در نسخهٔ Cloudflare، با کلید جداگانه برای قیمت‌ها.
 
 **عکس با Free.ai و ویس با OpenRouter (فقط Cloudflare):** [MEDIA.md](MEDIA.md) — چت روی OpenRouter می‌ماند؛ مسیرهای جدا و تنظیم صدای مصنوعی در راهنماست.
