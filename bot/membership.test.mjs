@@ -53,11 +53,11 @@ test('existing message-only webhook is upgraded in place with callbacks, keeping
     calls.push({ method, body });
     return method === 'getWebhookInfo' ? { url: 'https://bot.test/webhook', allowed_updates: ['message'], max_connections: 5 } : true;
   }, 'https://bot.test/webhook', 'fake-secret'), true);
-  assert.deepEqual(calls[1], { method: 'setWebhook', body: { url: 'https://bot.test/webhook', secret_token: 'fake-secret', allowed_updates: ['message', 'callback_query'], max_connections: 5, drop_pending_updates: false } });
+  assert.deepEqual(calls[1], { method: 'setWebhook', body: { url: 'https://bot.test/webhook', secret_token: 'fake-secret', allowed_updates: ['message', 'callback_query', 'channel_post', 'edited_channel_post'], max_connections: 5, drop_pending_updates: false } });
 });
 
 test('callback setup never changes unrelated webhooks or re-registers one already accepting callbacks', async () => {
-  for (const [url, updates, expected] of [['https://another.test/webhook', ['message'], false], ['https://bot.test/webhook', ['message', 'callback_query'], true], ['https://bot.test/webhook', [], true]]) {
+  for (const [url, updates, expected] of [['https://another.test/webhook', ['message'], false], ['https://bot.test/webhook', ['message', 'callback_query', 'channel_post', 'edited_channel_post'], true], ['https://bot.test/webhook', [], true]]) {
     let writes = 0;
     const result = await enableMembershipCallbacks(async method => {
       if (method === 'setWebhook') writes++;
@@ -78,6 +78,6 @@ test('an existing one-connection webhook is upgraded to four without narrowing a
       return method === 'getWebhookInfo' ? { url: 'https://bot.test/webhook', max_connections: 1, allowed_updates: updates } : true;
     }, 'https://bot.test/webhook', 'fake-secret'), true);
     assert.equal(calls[1].body.max_connections, 4); assert.equal(calls[1].body.drop_pending_updates, false);
-    assert.deepEqual(calls[1].body.allowed_updates, updates || []);
+    assert.deepEqual(calls[1].body.allowed_updates, updates?.length ? [...updates, 'channel_post', 'edited_channel_post'] : []);
   }
 });

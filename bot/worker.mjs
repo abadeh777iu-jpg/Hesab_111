@@ -1,3 +1,4 @@
+import { ChannelLibraryHandler } from './channel-library.mjs';
 import { CapacityHandler } from './load-control.mjs';
 import { InstagramFeedHandler } from './instagram.mjs';
 import { DurableObject } from 'cloudflare:workers';
@@ -26,14 +27,17 @@ export class MarketFeed extends DurableObject {
     this.calendar = new CalendarFeedHandler(ctx, env);
     this.instagram = new InstagramFeedHandler(ctx, env);
     this.capacity = new CapacityHandler(ctx);
+    this.library = new ChannelLibraryHandler(ctx);
   }
   fetch(request) {
     const path = new URL(request.url).pathname;
+    if (path.startsWith('/channel-')) return this.library.fetch(request);
     if (path === '/capacity') return this.capacity.fetch(request);
     if (['/ig-resolve', '/ig-recognize', '/ig-file-get', '/ig-file-put'].includes(path)) return this.instagram.fetch(request);
     if (path === '/calendar') return this.calendar.fetch();
     return path === '/news' ? this.news.fetch() : this.handler.fetch(request);
   }
+  alarm() { return this.library.alarm(); }
 }
 
 export class MediaBudget extends DurableObject {

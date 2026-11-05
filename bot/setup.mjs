@@ -1,3 +1,4 @@
+import { CHANNEL_UPDATES } from './channel-library.mjs';
 import { WEBHOOK_CONNECTIONS } from './load-control.mjs';
 // Owner-only, mobile-friendly webhook registration. Bot/API tokens never enter
 // this page or its URL. Only the existing random webhook secret is submitted.
@@ -62,7 +63,7 @@ form.addEventListener('submit',async event=>{event.preventDefault();button.disab
     };
     const webhook = new URL('/webhook', url.origin).href;
     await call('setWebhook', {
-      url: webhook, secret_token: secret, allowed_updates: ['message', 'callback_query'],
+      url: webhook, secret_token: secret, allowed_updates: CHANNEL_UPDATES,
       max_connections: WEBHOOK_CONNECTIONS, drop_pending_updates: false,
     });
     const info = await call('getWebhookInfo', {});
