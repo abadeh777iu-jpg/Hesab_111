@@ -7,7 +7,7 @@ import { makeWav } from './fixtures/audio.mjs';
 
 // Exercise actual Workers binary decoding + multipart upload, not Node-only mocks.
 // Both upstream services are local fake bindings: no tokens or live paid calls.
-for (const provider of ['openrouter', 'freeai', 'mixed']) test(`Workers ${provider} media runtime decodes files and uploads multipart attachments`, async t => {
+for (const provider of ['openrouter', 'freeai', 'mixed', 'laozhang']) test(`Workers ${provider} media runtime decodes files and uploads multipart attachments`, async t => {
   const helperPath = fileURLToPath(new URL('./media.mjs', import.meta.url));
   const entryPath = fileURLToPath(new URL('./media-runtime-entry.mjs', import.meta.url));
   const audioPath = fileURLToPath(new URL('./audio.mjs', import.meta.url));
@@ -17,8 +17,8 @@ for (const provider of ['openrouter', 'freeai', 'mixed']) test(`Workers ${provid
     modules: [{ type: 'ESModule', path: entryPath, contents: `
       import { generateImage, generateSpeech, uploadMedia } from './media.mjs';
       export default { async fetch(request, bindings) {
-        const env = { MEDIA_PROVIDER: '${provider === 'mixed' ? 'freeai' : provider}', ${provider === 'mixed' ? '' : `MEDIA_VOICE_PROVIDER: '${provider}',`} OPENROUTER_API_KEY: 'fake-key', TELEGRAM_BOT_TOKEN: 'fake-token',
-          FREEAI_API_KEY: 'fake-free-key',
+        const env = { MEDIA_PROVIDER: '${provider === 'mixed' ? 'freeai' : provider}', ${provider === 'mixed' ? '' : `MEDIA_VOICE_PROVIDER: '${provider === 'laozhang' ? 'openrouter' : provider}',`} OPENROUTER_API_KEY: 'fake-key', TELEGRAM_BOT_TOKEN: 'fake-token',
+          FREEAI_API_KEY: 'fake-free-key', LAOZHANG_API_KEY: 'fake-lao-key', LAOZHANG_IMAGE_MODEL: 'fixture-image-model',
           fetchImpl: (url, options) => bindings.UPSTREAM.fetch(url, options) };
         try {
           const image = await generateImage(env, 'snow');
@@ -48,6 +48,11 @@ for (const provider of ['openrouter', 'freeai', 'mixed']) test(`Workers ${provid
           if (url.pathname.endsWith('.wav')) return new Response(Uint8Array.from(atob('${Buffer.from(makeWav()).toString('base64')}'), ch => ch.charCodeAt(0)), { headers: { 'Content-Type': 'audio/wav' } });
         }
         return new Response('Unexpected Free.ai request', { status: 400 });
+      }
+      if (url.hostname === 'api2.laozhang.ai') {
+        const body = await request.json();
+        if (request.headers.get('Authorization') !== 'Bearer fake-lao-key' || url.pathname !== '/v1/images/generations' || body.model !== 'fixture-image-model' || body.n !== 1 || body.response_format !== 'b64_json') return new Response('Bad image request', { status: 400 });
+        return Response.json({ data: [{ b64_json: 'iVBORw0KGgoA' }] });
       }
       if (url.hostname === 'openrouter.ai') {
         if (request.headers.get('Authorization') !== 'Bearer fake-key') return new Response('Bad auth', { status: 401 });

@@ -18,7 +18,7 @@
 
 **قیمت دلار و طلا، هوا و هشدار بارش:** [INTERNET.md](INTERNET.md) — در نسخهٔ Cloudflare، با کلید جداگانه برای قیمت‌ها.
 
-**عکس با Free.ai و ویس با OpenRouter (فقط Cloudflare):** [MEDIA.md](MEDIA.md) — چت روی OpenRouter می‌ماند؛ مسیرهای جدا و تنظیم صدای مصنوعی در راهنماست.
+**عکس با انتخاب Free.ai یا LaoZhang و ویس با OpenRouter (فقط Cloudflare):** [MEDIA.md](MEDIA.md) — چت روی OpenRouter می‌ماند؛ مسیرهای جدا و تنظیم صدای مصنوعی در راهنماست.
 
 **برای Cloudflare Workers به [CLOUDFLARE.md](CLOUDFLARE.md) بروید.** توضیحات زیر فقط برای نسخهٔ Node.js و long polling است؛ در نسخهٔ کلودفلر، تاریخچه در Durable Objects ذخیره می‌شود و سیاست حافظه متفاوت است. این دو نسخه را هم‌زمان با یک توکن اجرا نکنید.
 

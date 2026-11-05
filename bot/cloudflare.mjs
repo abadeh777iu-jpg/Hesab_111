@@ -10,13 +10,13 @@ import { WeatherAssistant, nextWeatherWake } from './weather-assistant.mjs';
 import { isCalendarQuestion, iranToday, calendarReply } from './calendar.mjs';
 import { isMarketQuestion, isWeatherQuestion } from './live-data.mjs';
 import { isNewsQuestion, newsReply, newsFailureMessage, NEWS_UNAVAILABLE } from './news.mjs';
-import { parseMediaRequest, validateMediaConfiguration, PERSONAL_MEDIA_LIMITS, nextMediaDay, generateImage, generateSpeech, uploadMedia, mediaFailureMessage } from './media.mjs';
+import { isImageCallback, IMAGE_CHOICE_TTL, parseMediaRequest, validateMediaConfiguration, PERSONAL_MEDIA_LIMITS, nextMediaDay, generateImage, generateSpeech, uploadMedia, mediaFailureMessage } from './media.mjs';
 
 const TTL = 30 * 60_000;
 export const FOLLOWUP_NOTICE = OUTREACH_NOTICE;
 export const FOLLOWUP_DELAY = 24 * 60 * 60_000;
 export const FOLLOWUP_TEXT = 'سلام رفیق، امروز چطوری؟ 🙂🌱\n\nلغو احوال‌پرسی: /stop';
-export const CLOUD_PRIVACY = 'پیام‌ها برای پاسخ به OpenRouter و ارائه‌دهندهٔ مدل ارسال می‌شن. درخواست‌های منتظر با اعتبار حداکثر ۱۰ دقیقه در صف کلودفلر ذخیره و در پردازش یا پاک‌سازی بعدی حذف می‌شن؛ شناسهٔ دریافت برای جلوگیری از تکرار تا ۳۰ دقیقه می‌مونه. /reset متن‌های منتظر قبلی رو هم پاک می‌کنه؛ کاری که شروع شده ممکنه قبلاً به سرویس مقصد فرستاده شده باشه. حداکثر ۳۰ پیام اخیر در کلودفلر نگه داشته و بعد از ۳۰ دقیقه بی‌فعالیتی یا /reset از حافظهٔ فعال حذف می‌شن. احوال‌پرسی پس از اطلاع کوتاه در گفتگو خودکار فعاله؛ حدود ۲۴ ساعت بعد از آخرین پیام، یک پیام عمومی می‌فرستیم، نه پیام تکراری روزانه. لغو: /stop — فعال‌سازی دوباره: /followup. شناسهٔ چت و زمان ارسال جدا از متن گفتگو ذخیره می‌شن؛ با لغو، این دو حذف و فقط ترجیح خاموشی نگه داشته می‌شه تا با پیام جدید یا /start دوباره فعال نشه. /reset هم پیگیری رو خاموش می‌کنه. پیام‌های تلگرام، داده‌های سرویس مدل و نسخه‌های پشتیبان تابع سیاست همون سرویس‌ها هستن. شهر پیش‌فرض آباده، فارس است، نه لزوماً محل زندگی تو. پیام‌های خودکار بعد از اطلاع کلیِ پیام‌دادن فعال می‌شن. جملهٔ همراه خبر هوا با OpenRouter تولید می‌شه؛ اگر گفتگوی تازه‌ای باشه، فقط یک نشانهٔ کلی برای ملایم‌ترشدن لحن به‌صورت محلی گرفته می‌شه؛ متن خصوصی گفتگو در درخواست نوشتن جمله فرستاده نمی‌شه. شهر دلخواه و مختصات تقریبی آن جداگانه برای هوا نگه داشته و به Open-Meteo ارسال می‌شه؛ حذف شهر و هشدارها: /forgetcity یا /reset. ترجیح خاموشی هوا هم جدا نگه داشته می‌شه تا با پیام جدید دوباره فعال نشه. /stop همهٔ پیام‌های خودکار رو خاموش می‌کنه. زمان درخواست تست هوا فقط برای محدودکردن مصرف تا یک ساعت نگه داشته می‌شه. چت و نوشتن پاسخ روی OpenRouter می‌مونه. برای عکس، توضیح درخواستی به Free.ai و مدل تصویر فرستاده می‌شه؛ برای ویس، فقط متن پاسخ به سرویس صدای OpenRouter و ارائه‌دهندهٔ مدل گفتار فرستاده می‌شه؛ اگر مدیر آگاهانه سرویس رسانه رو عوض کنه، مقصد همان سرویس انتخابی می‌شه. فایل خروجی Free.ai ممکنه تا مدتی روی آدرس عمومی سرویس در دسترس باشه و سیاست نگهداری خودش اعمال می‌شه؛ فایل ساخته‌شده به تلگرام ارسال می‌شه ولی این برنامه فایل رو ذخیره یا لاگ نمی‌کنه. ویس صدای مصنوعیه، نه صدای واقعی امیر. بودجهٔ مصرف عکس و ویس بدون متن یا فایل تا پایان روز UTC نگه داشته می‌شه؛ /reset این محدودیت مصرف رو پاک نمی‌کنه. اخبار ایران فقط با سؤال تو از خوراک عمومی ایسنا، بی‌بی‌سی فارسی، صداوسیما و فاکس‌نیوز و صفحهٔ عمومی کانال فارس دریافت می‌شه؛ متن خصوصی یا کلیدت به رسانه‌ها نمی‌ره. فقط تیتر و خلاصهٔ خبرها برای بازنویسی به OpenRouter می‌ره و از اعتبار مدیر استفاده می‌کنه؛ این خلاصه، تأیید مستقل گزارش رسانه نیست. دریافت خبرها تا یک دقیقه مشترک cache می‌شه؛ در قطع منبع، آخرین داده با برچسب ذخیره‌شده و فقط تا ۲۴ ساعت از انتشار قابل نمایشه. پیام خبری خودکار نداریم. تاریخ و روز هفته به وقت ایران از ساعت برنامه محاسبه می‌شه؛ مناسبت‌های ثابت محلی‌اند و تعطیلات از تقویم عمومی ایران گوگل، بدون شناسه یا پیام خصوصی، دریافت و مشترک ذخیره می‌شن. پاسخ تقویم از OpenRouter اعتبار مصرف نمی‌کنه و اعلان روزانهٔ تازه‌ای فعال نمی‌کنه. برای چت، عضویت در کانال @qhatel_roya با شناسهٔ تلگرام و از طریق خود تلگرام بررسی می‌شه؛ متن پیام برای کانال فرستاده نمی‌شه و نتیجهٔ عضویت دائماً ذخیره نمی‌شه. خروج از کانال، دسترسی چت و پیام‌های خودکار رو تا عضویت مجدد محدود می‌کنه. /stop و /reset و فرمان‌های حریم خصوصی بدون عضویت هم در دسترس‌اند. لینک پست یا ریلز عمومی برای دریافت به vxInstagram و فقط با زدن دکمهٔ موسیقی به SongFinder فرستاده می‌شه؛ نه متن گفتگو یا کلیدها. فایل ویدئو موقتاً برای ارسال دریافت می‌شه و این برنامه آن را ذخیره نمی‌کنه. شناسهٔ فایل عمومیِ آپلودشده در تلگرام تا ۵ دقیقه برای ارسال دوباره قابل استفاده است؛ نگهداری فایل در تلگرام تابع سیاست آن سرویس است. لینک عمومی و شناسهٔ پیامِ حداکثر سه دکمه تا ۳۰ دقیقه در حافظهٔ گفتگو و شمارندهٔ تلاش‌ها جدا تا پایان روز UTC می‌مونه؛ /reset لینک‌ها رو پاک می‌کنه نه سهمیه‌ها. منابع رایگان ممکنه محدود یا قطع بشن و ارسال فایل کامل آهنگ تضمین نیست. پست‌های عمومی جدید کانال با توضیح کوتاه تا ۳۰ روز ثبت می‌شن؛ نه فایل یا متن خصوصی. انتخاب از کپشنه، نه شنیدن یا دیدن فایل؛ پیشنهادهای شخصی تا پایان جلسه یا /reset می‌مونن. پستِ مرتبط می‌تونه بدون دکمه با نام کانال فرستاده بشه؛ ارسال زمینه‌ای خودکار حداکثر روزی یک پسته و لغوش /channelstop یا /stop است. فقط زمان و شناسهٔ پستِ این ارسال تا ۲۴ ساعت برای جلوگیری از تکرار نگه داشته می‌شه. لطفاً اطلاعات حساس نفرست.';
+export const CLOUD_PRIVACY = 'پیام‌ها برای پاسخ به OpenRouter و ارائه‌دهندهٔ مدل ارسال می‌شن. درخواست‌های منتظر با اعتبار حداکثر ۱۰ دقیقه در صف کلودفلر ذخیره و در پردازش یا پاک‌سازی بعدی حذف می‌شن؛ شناسهٔ دریافت برای جلوگیری از تکرار تا ۳۰ دقیقه می‌مونه. /reset متن‌های منتظر قبلی رو هم پاک می‌کنه؛ کاری که شروع شده ممکنه قبلاً به سرویس مقصد فرستاده شده باشه. حداکثر ۳۰ پیام اخیر در کلودفلر نگه داشته و بعد از ۳۰ دقیقه بی‌فعالیتی یا /reset از حافظهٔ فعال حذف می‌شن. احوال‌پرسی پس از اطلاع کوتاه در گفتگو خودکار فعاله؛ حدود ۲۴ ساعت بعد از آخرین پیام، یک پیام عمومی می‌فرستیم، نه پیام تکراری روزانه. لغو: /stop — فعال‌سازی دوباره: /followup. شناسهٔ چت و زمان ارسال جدا از متن گفتگو ذخیره می‌شن؛ با لغو، این دو حذف و فقط ترجیح خاموشی نگه داشته می‌شه تا با پیام جدید یا /start دوباره فعال نشه. /reset هم پیگیری رو خاموش می‌کنه. پیام‌های تلگرام، داده‌های سرویس مدل و نسخه‌های پشتیبان تابع سیاست همون سرویس‌ها هستن. شهر پیش‌فرض آباده، فارس است، نه لزوماً محل زندگی تو. پیام‌های خودکار بعد از اطلاع کلیِ پیام‌دادن فعال می‌شن. جملهٔ همراه خبر هوا با OpenRouter تولید می‌شه؛ اگر گفتگوی تازه‌ای باشه، فقط یک نشانهٔ کلی برای ملایم‌ترشدن لحن به‌صورت محلی گرفته می‌شه؛ متن خصوصی گفتگو در درخواست نوشتن جمله فرستاده نمی‌شه. شهر دلخواه و مختصات تقریبی آن جداگانه برای هوا نگه داشته و به Open-Meteo ارسال می‌شه؛ حذف شهر و هشدارها: /forgetcity یا /reset. ترجیح خاموشی هوا هم جدا نگه داشته می‌شه تا با پیام جدید دوباره فعال نشه. /stop همهٔ پیام‌های خودکار رو خاموش می‌کنه. زمان درخواست تست هوا فقط برای محدودکردن مصرف تا یک ساعت نگه داشته می‌شه. چت و نوشتن پاسخ روی OpenRouter می‌مونه. برای عکس، توضیح درخواستی فقط به سرویس انتخابی تو، Free.ai یا LaoZhang و مدل تصویرش فرستاده می‌شه؛ انتخاب معلق ۱۰ دقیقه اعتبار داره و با انتخاب، /reset یا پاک‌سازی بعد از انقضا حذف می‌شه. LaoZhang مصرف اعتبار داره؛ برای ویس، فقط متن پاسخ به سرویس صدای OpenRouter و ارائه‌دهندهٔ مدل گفتار فرستاده می‌شه؛ اگر مدیر آگاهانه سرویس رسانه رو عوض کنه، مقصد همان سرویس انتخابی می‌شه. فایل خروجی Free.ai ممکنه تا مدتی روی آدرس عمومی سرویس در دسترس باشه و سیاست نگهداری خودش اعمال می‌شه؛ فایل ساخته‌شده به تلگرام ارسال می‌شه ولی این برنامه فایل رو ذخیره یا لاگ نمی‌کنه. ویس صدای مصنوعیه، نه صدای واقعی امیر. بودجهٔ مصرف عکس و ویس بدون متن یا فایل تا پایان روز UTC نگه داشته می‌شه؛ /reset این محدودیت مصرف رو پاک نمی‌کنه. اخبار ایران فقط با سؤال تو از خوراک عمومی ایسنا، بی‌بی‌سی فارسی، صداوسیما و فاکس‌نیوز و صفحهٔ عمومی کانال فارس دریافت می‌شه؛ متن خصوصی یا کلیدت به رسانه‌ها نمی‌ره. فقط تیتر و خلاصهٔ خبرها برای بازنویسی به OpenRouter می‌ره و از اعتبار مدیر استفاده می‌کنه؛ این خلاصه، تأیید مستقل گزارش رسانه نیست. دریافت خبرها تا یک دقیقه مشترک cache می‌شه؛ در قطع منبع، آخرین داده با برچسب ذخیره‌شده و فقط تا ۲۴ ساعت از انتشار قابل نمایشه. پیام خبری خودکار نداریم. تاریخ و روز هفته به وقت ایران از ساعت برنامه محاسبه می‌شه؛ مناسبت‌های ثابت محلی‌اند و تعطیلات از تقویم عمومی ایران گوگل، بدون شناسه یا پیام خصوصی، دریافت و مشترک ذخیره می‌شن. پاسخ تقویم از OpenRouter اعتبار مصرف نمی‌کنه و اعلان روزانهٔ تازه‌ای فعال نمی‌کنه. برای چت، عضویت در کانال @qhatel_roya با شناسهٔ تلگرام و از طریق خود تلگرام بررسی می‌شه؛ متن پیام برای کانال فرستاده نمی‌شه و نتیجهٔ عضویت دائماً ذخیره نمی‌شه. خروج از کانال، دسترسی چت و پیام‌های خودکار رو تا عضویت مجدد محدود می‌کنه. /stop و /reset و فرمان‌های حریم خصوصی بدون عضویت هم در دسترس‌اند. لینک پست یا ریلز عمومی برای دریافت به vxInstagram و فقط با زدن دکمهٔ موسیقی به SongFinder فرستاده می‌شه؛ نه متن گفتگو یا کلیدها. فایل ویدئو موقتاً برای ارسال دریافت می‌شه و این برنامه آن را ذخیره نمی‌کنه. شناسهٔ فایل عمومیِ آپلودشده در تلگرام تا ۵ دقیقه برای ارسال دوباره قابل استفاده است؛ نگهداری فایل در تلگرام تابع سیاست آن سرویس است. لینک عمومی و شناسهٔ پیامِ حداکثر سه دکمه تا ۳۰ دقیقه در حافظهٔ گفتگو و شمارندهٔ تلاش‌ها جدا تا پایان روز UTC می‌مونه؛ /reset لینک‌ها رو پاک می‌کنه نه سهمیه‌ها. منابع رایگان ممکنه محدود یا قطع بشن و ارسال فایل کامل آهنگ تضمین نیست. پست‌های عمومی جدید کانال با توضیح کوتاه تا ۳۰ روز ثبت می‌شن؛ نه فایل یا متن خصوصی. انتخاب از کپشنه، نه شنیدن یا دیدن فایل؛ پیشنهادهای شخصی تا پایان جلسه یا /reset می‌مونن. پستِ مرتبط می‌تونه بدون دکمه با نام کانال فرستاده بشه؛ ارسال زمینه‌ای خودکار حداکثر روزی یک پسته و لغوش /channelstop یا /stop است. فقط زمان و شناسهٔ پستِ این ارسال تا ۲۴ ساعت برای جلوگیری از تکرار نگه داشته می‌شه. لطفاً اطلاعات حساس نفرست.';
 const ABOUT = `${PERSONA_GREETING}\n\n${CREATOR_REPLY}\n\n${CLOUD_PRIVACY}\n\nلغو احوال‌پرسی: /stop — فعال‌سازی دوباره: /followup\n\nاین روزها مشغول چه کاری هستی و کجاش گیر کردی؟`;
 const FAILURE = 'الان نتونستم پاسخ رو آماده یا ارسال کنم. لطفاً کمی بعد دوباره پیام بده. اگر در خطر فوری هستی، منتظر ربات نمون و با خدمات اضطراری محل یا یک فرد مطمئن تماس بگیر.';
 const ok = () => new Response('OK');
@@ -68,7 +68,7 @@ export function createWorker() {
         } catch { return new Response('Temporarily unavailable', { status: 503 }); }
       }
       const callback = update.callback_query;
-      if (callback && (update.message || (callback.data !== JOIN_CALLBACK && !isMusicCallback(callback.data) && !isChannelCallback(callback.data)) || typeof callback.id !== 'string' || !callback.id.length || callback.id.length > 256 || (!Number.isSafeInteger(callback.message?.message_id) || callback.message.message_id <= 0))) return ok();
+      if (callback && (update.message || (callback.data !== JOIN_CALLBACK && !isMusicCallback(callback.data) && !isChannelCallback(callback.data) && !isImageCallback(callback.data)) || typeof callback.id !== 'string' || !callback.id.length || callback.id.length > 256 || (!Number.isSafeInteger(callback.message?.message_id) || callback.message.message_id <= 0))) return ok();
       const message = callback ? { ...callback.message, from: callback.from } : update.message;
       if (!message?.from || message.from.is_bot || message.chat?.type !== 'private') return ok();
       if (!Number.isSafeInteger(message.from.id) || !Number.isSafeInteger(message.chat.id) || message.from.id <= 0 || message.from.id !== message.chat.id) return ok();
@@ -136,6 +136,8 @@ export class ChatSession {
           await this.disableFollowup();
         }
       }
+      const choiceSession = await this.ctx.storage.get('session');
+      if (choiceSession?.imageChoice?.expiresAt <= Date.now()) { delete choiceSession.imageChoice; await this.ctx.storage.put('session', choiceSession); }
       const channelAuto = await this.ctx.storage.get('channelAuto');
       if (channelAuto?.expiresAt <= Date.now()) await this.ctx.storage.delete('channelAuto');
       const mediaUsage = await this.ctx.storage.get('mediaUsage');
@@ -169,7 +171,7 @@ export class ChatSession {
       const instagramUsage = await this.ctx.storage.get('instagramUsage');
       const inbox = await this.ctx.storage.get('inbox');
       const channelAuto = await this.ctx.storage.get('channelAuto');
-      const times = [candidate, record?.expiresAt, (followup?.disabled ? null : followup?.dueAt), nextWeatherWake(weather), preview?.expiresAt, mediaUsage?.expiresAt, instagramUsage?.expiresAt, nextInstagramJob(record), nextChannelOffer(record), nextInboxWake(inbox), channelAuto?.expiresAt].filter(time => Number.isFinite(time) && time > 0);
+      const times = [candidate, record?.expiresAt, (followup?.disabled ? null : followup?.dueAt), nextWeatherWake(weather), preview?.expiresAt, mediaUsage?.expiresAt, instagramUsage?.expiresAt, nextInstagramJob(record), record?.imageChoice?.expiresAt, nextChannelOffer(record), nextInboxWake(inbox), channelAuto?.expiresAt].filter(time => Number.isFinite(time) && time > 0);
       if (times.length) await this.ctx.storage.setAlarm(Math.max(Date.now() + 50, Math.min(...times)));
       else await this.ctx.storage.deleteAlarm();
     });
@@ -294,7 +296,7 @@ export class ChatSession {
     if (media) waitUntil = Math.max(waitUntil, (await this.ctx.storage.get('mediaUsage'))?.lastAt + 60000 || 0);
     if (waitUntil > Date.now()) { await this.inbox.defer(waitUntil - Date.now(), job.id); return; }
     let granted = false;
-    try { granted = (await this.capacity({ op: 'start', id: job.id, kind: media || instagramRequest(text) || isMusicCallback(job.update.callback_query?.data) || isChannelCallback(job.update.callback_query?.data) || (automaticChannelPosts(this.env) && (channelRequest(text)?.kind || positiveWeatherContext(text))) ? 'media' : 'text' })).granted; }
+    try { granted = (await this.capacity({ op: 'start', id: job.id, kind: media || instagramRequest(text) || isMusicCallback(job.update.callback_query?.data) || isImageCallback(job.update.callback_query?.data) || isChannelCallback(job.update.callback_query?.data) || (automaticChannelPosts(this.env) && (channelRequest(text)?.kind || positiveWeatherContext(text))) ? 'media' : 'text' })).granted; }
     catch { /* Retry admission later, never run without a capacity lease. */ }
     if (!granted) { await this.inbox.defer(undefined, job.id); return; }
     const claimed = await this.inbox.claim(job.id);
@@ -508,6 +510,32 @@ export class ChatSession {
     await this.scheduleAlarm();
     return null;
   }
+  async offerImageChoice(chat, prompt, record) {
+    const token = crypto.randomUUID().replaceAll('-', '');
+    // Only one pending prompt per chat, never included in model history.
+    record.imageChoice = { token, prompt, chatId: chat, expiresAt: Date.now() + IMAGE_CHOICE_TTL };
+    await this.persist(record);
+    const message = await this.telegram('sendMessage', { chat_id: chat,
+      text: 'عکس رو با کدوم سرویس بسازم؟ 🎨\nLaoZhang از اعتبار همون حساب مصرف می‌کنه؛ اگر اعتبار نداشته باشه انجام نمی‌شه. سقف مصرف هر دو مشترکه.',
+      reply_markup: { inline_keyboard: [[
+        { text: 'Free.ai', callback_data: `imgpick:${token}:freeai` },
+        { text: 'LaoZhang · اعتباری', callback_data: `imgpick:${token}:laozhang` },
+      ]] } });
+    if (!Number.isSafeInteger(message?.message_id)) { delete record.imageChoice; await this.persist(record); return; }
+    record.imageChoice.messageId = message.message_id;
+    await this.persist(record);
+  }
+  async chooseImageProvider(chat, callback, record) {
+    const [, token, provider] = callback.data.split(':');
+    const choice = record.imageChoice;
+    if (!choice || choice.chatId !== chat || choice.token !== token || choice.expiresAt <= Date.now() || choice.messageId !== callback.message.message_id) {
+      await this.send(chat, 'این انتخاب منقضی یا قبلاً استفاده شده؛ دوباره درخواست عکس رو بفرست 🌱'); return;
+    }
+    // Consume both buttons before any quota reservation, generation or upload.
+    delete record.imageChoice; await this.persist(record);
+    await this.telegram('editMessageReplyMarkup', { chat_id: chat, message_id: callback.message.message_id, reply_markup: { inline_keyboard: [] } }).catch(() => {});
+    await this.handleMedia(chat, { kind: 'image', prompt: choice.prompt, provider }, record);
+  }
   async handleMedia(chat, request, record) {
     const { kind, prompt } = request;
     if (this.env.MEDIA_ENABLED === 'false' || !this.env.MEDIA) {
@@ -523,13 +551,17 @@ export class ChatSession {
         : 'برای ویس، سؤالت رو بنویس 🎙️ مثلاً: /voice چطور کارمو شروع کنم؟\nیا بعد از جواب متنی، /voice بفرست. صدای مصنوعیه، نه صدای واقعی امیر.');
       return;
     }
+    if (kind === 'image' && !request.provider) { await this.offerImageChoice(chat, prompt, record); return; }
+    if (kind === 'image' && !['freeai', 'laozhang'].includes(request.provider)) { await this.send(chat, 'سرویس تصویر نامعتبره 🌱'); return; }
+    if (kind === 'image' && record.imageChoice) { delete record.imageChoice; await this.persist(record); }
+    const mediaEnv = kind === 'image' ? { ...this.env, MEDIA_IMAGE_PROVIDER: request.provider } : this.env;
     try {
-      validateMediaConfiguration(this.env, kind);
+      validateMediaConfiguration(mediaEnv, kind);
       const denied = await this.reserveMedia(kind);
       if (denied) { await this.send(chat, denied); return; }
       if (kind === 'image') {
         await this.send(chat, 'دارم عکست رو می‌سازم 🎨✨ ممکنه کمی طول بکشه.');
-        await uploadMedia(this.env, chat, kind, await generateImage(this.env, prompt));
+        await uploadMedia(this.env, chat, kind, await generateImage(mediaEnv, prompt));
       } else {
         let answer = previous;
         if (prompt) {
@@ -555,6 +587,7 @@ export class ChatSession {
   async process(update) {
     let record = await this.ctx.storage.get('session');
     if (!record || record.expiresAt <= Date.now()) record = { messages: [], seen: [], lastAt: 0, introduced: false };
+    if (record.imageChoice?.expiresAt <= Date.now()) delete record.imageChoice;
     if (record.seen.includes(update.update_id)) return ok();
     // Reserve before external calls. This is at-most-once within the retention
     // window: a crash can lose a reply, but a Telegram retry won't double-charge.
@@ -571,7 +604,9 @@ export class ChatSession {
         if (!update.callbackAcknowledged) await this.telegram('answerCallbackQuery', { callback_query_id: callback.id }, 2000).catch(() => {});
         const status = membershipRequired(this.env) ? await this.membership.check(chat) : 'member';
         if (status === 'member') await this.ensureDefaultWeather(chat);
-        if (status === 'member' && isChannelCallback(callback.data)) {
+        if (status === 'member' && isImageCallback(callback.data)) {
+          await this.chooseImageProvider(chat, callback, record);
+        } else if (status === 'member' && isChannelCallback(callback.data)) {
           await this.deliverChannelPost(chat, callback, record);
         } else if (status === 'member' && isMusicCallback(callback.data)) {
           await this.handleInstagramMusic(chat, callback, record);
@@ -596,6 +631,7 @@ export class ChatSession {
         }
         record.messages = [];
         record.instagramJobs = [];
+        delete record.imageChoice;
         delete record.channelOffers; delete record.channelRecent; delete record.channelOfferAt; delete record.channelDeliveryAt;
         record.lastAt = 0;
         record.introduced = command === '/start';
@@ -622,7 +658,7 @@ export class ChatSession {
       if (command === '/about') { await this.send(chat, ABOUT); return ok(); }
       if (command === '/privacy') { await this.send(chat, CLOUD_PRIVACY); return ok(); }
       if (command === '/help') {
-        await this.send(chat, '/start سلام و شروع دوباره\n/about دربارهٔ امیر\n/creator ارتباط با سازنده\n/reset پاک‌کردن حافظهٔ فعال گفتگو\n/privacy حریم خصوصی\n/followup فعال‌سازی دوبارهٔ احوال‌پرسی\n/stop لغو همهٔ پیام‌های خودکار\n/image توضیح عکس دلخواه\n/voice سؤال یا خواندن پاسخ قبلی با صدای مصنوعی\n/channel انتخاب از پست‌های جدید کانال\n/song آهنگ از کانال — /clip کلیپ — /quote جمله\n/channelstop لغو پست خودکار کانال — /channelauto فعال‌سازی\nلینک ریلز یا پست ویدئویی عمومی: دریافت ویدئو و دکمهٔ شناسایی موسیقی؛ هر نفر روزی ۵ تلاش برای هر بخش، حداکثر ۲۰ مگابایت\n/date تاریخ، روز هفته و مناسبت‌های ثبت‌شده\n/prices قیمت دلار و طلا\n/news یا «چه خبر؟» اخبار ایران\n/city نام شهر\n/weather وضعیت هوا\n/test_snow یا /test_rain یا /test_cloud تست شخصی و ساختگی هوا\n/alerts برگرداندن خبرهای هوا بعد از لغو (پیش‌فرض فعاله)\n/weatherstop خاموش‌کردن هشدار هوا\n/forgetcity حذف شهر\n\nورودی فقط متن در چت خصوصی؛ عکس و ویس فقط با درخواست خودت، از اعتبار مدیر و با سقف مصرف. هر نفر روزی پنج عکس و سه ویس؛ کل ربات ده عکس و ده ویس (روز UTC). صدای ویس مصنوعیه. من هوش مصنوعی‌ام و جایگزین درمانگر یا خدمات اضطراری نیستم.');
+        await this.send(chat, '/start سلام و شروع دوباره\n/about دربارهٔ امیر\n/creator ارتباط با سازنده\n/reset پاک‌کردن حافظهٔ فعال گفتگو\n/privacy حریم خصوصی\n/followup فعال‌سازی دوبارهٔ احوال‌پرسی\n/stop لغو همهٔ پیام‌های خودکار\n/image توضیح عکس دلخواه؛ سپس انتخاب Free.ai یا LaoZhang\n/voice سؤال یا خواندن پاسخ قبلی با صدای مصنوعی\n/channel انتخاب از پست‌های جدید کانال\n/song آهنگ از کانال — /clip کلیپ — /quote جمله\n/channelstop لغو پست خودکار کانال — /channelauto فعال‌سازی\nلینک ریلز یا پست ویدئویی عمومی: دریافت ویدئو و دکمهٔ شناسایی موسیقی؛ هر نفر روزی ۵ تلاش برای هر بخش، حداکثر ۲۰ مگابایت\n/date تاریخ، روز هفته و مناسبت‌های ثبت‌شده\n/prices قیمت دلار و طلا\n/news یا «چه خبر؟» اخبار ایران\n/city نام شهر\n/weather وضعیت هوا\n/test_snow یا /test_rain یا /test_cloud تست شخصی و ساختگی هوا\n/alerts برگرداندن خبرهای هوا بعد از لغو (پیش‌فرض فعاله)\n/weatherstop خاموش‌کردن هشدار هوا\n/forgetcity حذف شهر\n\nورودی فقط متن در چت خصوصی؛ عکس و ویس فقط با درخواست خودت، از اعتبار مدیر و با سقف مصرف. هر نفر روزی پنج عکس و سه ویس؛ کل ربات ده عکس و ده ویس (روز UTC). صدای ویس مصنوعیه. من هوش مصنوعی‌ام و جایگزین درمانگر یا خدمات اضطراری نیستم.');
         return ok();
       }
       if (isCreatorQuestion(text)) {

@@ -402,3 +402,44 @@ test('Gemini WAV-wrapped unary audio is not interpreted as raw PCM samples', asy
   const file = await generateSpeech({ OPENROUTER_API_KEY: 'key', fetchImpl: async () => new Response(wav, { headers: { 'Content-Type': 'audio/pcm' } }) }, 'سلام');
   assert.deepEqual(file.bytes, wavToMp3(wav));
 });
+
+test('explicit per-request image provider parsing never changes voice or treats incidental names as commands', () => {
+  assert.deepEqual(parseMediaRequest('/image FreeAI کلبه'), { kind: 'image', provider: 'freeai', prompt: 'کلبه' });
+  assert.deepEqual(parseMediaRequest('/image@my_bot laozhang کلبه'), { kind: 'image', provider: 'laozhang', prompt: 'کلبه' });
+  assert.deepEqual(parseMediaRequest('/voice laozhang سلام'), { kind: 'voice', prompt: 'laozhang سلام' });
+  assert.deepEqual(parseMediaRequest('/image laozhangish cabin'), { kind: 'image', prompt: 'laozhangish cabin' });
+});
+
+test('LaoZhang uses one fixed authenticated request and bounded validated base64 bytes, never a second provider', async () => {
+  let calls = 0;
+  const file = await generateImage({ MEDIA_IMAGE_PROVIDER: 'laozhang', LAOZHANG_API_KEY: 'private-lao-key', LAOZHANG_IMAGE_MODEL: 'fixture-model', fetchImpl: async (url, options) => {
+    calls++;
+    assert.equal(url, 'https://api2.laozhang.ai/v1/images/generations'); assert.equal(options.redirect, 'manual');
+    assert.equal(options.headers.Authorization, 'Bearer private-lao-key');
+    assert.deepEqual(JSON.parse(options.body), { model: 'fixture-model', prompt: 'کلبه', n: 1, size: '1024x1024', response_format: 'b64_json' });
+    return imageJSON();
+  } }, 'کلبه');
+  assert.equal(calls, 1); assert.deepEqual(file.bytes, png);
+});
+
+test('LaoZhang missing configuration fails before any upstream call; no model or credit is guessed', async () => {
+  const env = { MEDIA_IMAGE_PROVIDER: 'laozhang', fetchImpl: async () => { assert.fail('No network call permitted'); } };
+  await assert.rejects(generateImage(env, 'snow'), { code: 'LAOZHANG_KEY' });
+  for (const model of ['', 'https://private.internal', 'a b']) await assert.rejects(generateImage({ ...env, LAOZHANG_API_KEY: 'key', LAOZHANG_IMAGE_MODEL: model }, 'snow'), { code: 'LAOZHANG_MODEL' });
+});
+
+test('LaoZhang URL-only, invalid, oversized, rejected and redirect responses never cause downloads, fallback or leaked errors', async () => {
+  for (const [reply, code] of [
+    [() => Response.json({ data: [{ url: 'http://127.0.0.1/private' }] }), 'LAOZHANG_DATA'],
+    [() => Response.json({ data: [{ b64_json: btoa('<svg>private-key</svg>') }] }), 'LAOZHANG_DATA'],
+    [() => new Response(null, { status: 302, headers: { Location: 'https://elsewhere.invalid' } }), 'HTTP_302'],
+    [() => new Response('private credential', { status: 402 }), 'HTTP_402'],
+    [() => Response.json({ error: { message: 'invalid model private credential' } }, { status: 400 }), 'LAO_HTTP_400_MODEL'],
+    [() => new Response('x', { headers: { 'Content-Type': 'application/json', 'Content-Length': String(9 * 1024 * 1024) } }), 'SIZE'],
+  ]) {
+    let calls = 0;
+    await assert.rejects(generateImage({ MEDIA_IMAGE_PROVIDER: 'laozhang', LAOZHANG_API_KEY: 'private credential', LAOZHANG_IMAGE_MODEL: 'fixture-model', fetchImpl: async () => { calls++; return reply(); } }, 'snow'), { code });
+    assert.equal(calls, 1); assert.ok(!mediaFailureMessage({ code }).includes('private credential'));
+    if (code.includes('MODEL')) { assert.ok(mediaFailureMessage({ code }).includes('LaoZhang')); assert.ok(!mediaFailureMessage({ code }).includes('Free.ai')); }
+  }
+});

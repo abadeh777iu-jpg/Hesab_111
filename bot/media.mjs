@@ -15,19 +15,24 @@ export const DEFAULT_FREEAI_SPEECH_MODEL = 'piper';
 // Standard Persian Piper voice ID, not a clone of the bot owner. Free.ai account
 // availability still needs a live user test; overrides remain supported.
 export const DEFAULT_FREEAI_VOICE = 'fa_IR-amir-medium';
+export const IMAGE_CHOICE_TTL = 10 * 60_000;
+export const isImageCallback = value => typeof value === 'string' && /^imgpick:[a-f0-9]{32}:(freeai|laozhang)$/.test(value);
 const MAX_FILE = 5 * 1024 * 1024;
 export class MediaError extends Error {
   constructor(code) { super('Media request failed'); this.code = code; }
 }
 export function mediaFailureMessage(error) {
+  if (error?.code === 'LAOZHANG_KEY') return 'LaoZhang هنوز وصل نشده 🌱 مدیر باید LAOZHANG_API_KEY رو فقط در Secrets کلودفلر ثبت کنه؛ کلید رو در چت نفرست. می‌تونی درخواست تازه رو با Free.ai بفرستی.';
+  if (error?.code === 'LAOZHANG_MODEL') return 'مدل عکس LaoZhang هنوز تنظیم نشده 🌱 مدیر باید LAOZHANG_IMAGE_MODEL رو مطابق مدل مجاز حساب تنظیم کنه؛ هنوز سهمیه یا اعتباری مصرف نشده.';
+  if (error?.code === 'LAOZHANG_DATA') return 'LaoZhang عکس PNG یا JPEG به‌صورت base64 برنگردوند؛ مدل باید با این خروجی سازگار باشه 🌱 برای جلوگیری از هزینهٔ دوباره خودکار تکرار نمی‌کنم.';
   if (error?.code === 'OR_VOICE_CONFIG') return 'تنظیم صدای OpenRouter با مدل انتخابی سازگار نیست 🌱 نام صدا را از فهرست همان مدل انتخاب کنید؛ برای این درخواست اعتباری مصرف نشد.';
-  if (error?.code === 'OPENROUTER_KEY') return 'برای ویس، کلید OpenRouter باید در Secrets ربات تنظیم باشه 🌱 کلید رو در چت نفرست؛ عکس همچنان از Free.ai استفاده می‌کنه.';
+  if (error?.code === 'OPENROUTER_KEY') return 'برای ویس، کلید OpenRouter باید در Secrets ربات تنظیم باشه 🌱 کلید رو در چت نفرست؛ عکس از سرویس انتخابی خودت استفاده می‌کنه.';
   if (error?.code === 'FREEAI_KEY') return 'سرویس Free.ai هنوز وصل نشده 🌱 مدیر باید FREEAI_API_KEY رو در Secrets کلودفلر ثبت کنه؛ کلید رو در چت نفرست.';
   if (error?.code === 'FREEAI_VOICE') return 'برای مدل صوتی انتخاب‌شده باید صدای سازگار هم مشخص بشه 🌱 مدیر FREEAI_TTS_VOICE رو بررسی کنه. فعلاً برای ویس اعتباری مصرف نشد.';
   if (error?.code === 'ASSET_URL') return 'سرویس رسانه آدرس فایل خارج از مسیر مجاز برگردوند؛ برای امنیت فایل رو دریافت نکردم 🌱 تکرار خودکار انجام نمی‌شه.';
   if (error?.code === 'AUDIO_FORMAT') return 'سرویس فایل صوتی سازگار با ویس تلگرام نداد 🌱 خروجی صوتی یا WAV قابل‌تبدیل معتبر نبود. پاسخ متنی باقی مونده؛ تکرار خودکار نمی‌کنم.';
   if (error?.code === 'HTTP_401' || error?.code === 'HTTP_403') return 'کلید یا دسترسی سرویس رسانه پذیرفته نشد 🌱 مدیر باید تنظیمات همون سرویس رو بررسی کنه؛ کلید رو در چت نفرست.';
-  const rejected = /^((?:OR_)?HTTP_(?:400|422))_(MODEL|VOICE|LANGUAGE|FORMAT|INPUT)$/.exec(error?.code || '');
+  const rejected = /^((?:(?:OR|LAO)_)?HTTP_(?:400|422))_(MODEL|VOICE|LANGUAGE|FORMAT|INPUT)$/.exec(error?.code || '');
   if (rejected) {
     const reasons = {
       MODEL: 'Free.ai خطای مدل رو اعلام کرده؛ مدل انتخابی باید در API همین حساب قابل‌استفاده باشه.',
@@ -36,9 +41,9 @@ export function mediaFailureMessage(error) {
       FORMAT: 'Free.ai خطای فرمت خروجی رو اعلام کرده؛ فرمت مجاز همین مدل باید بررسی بشه.',
       INPUT: 'Free.ai خطای ورودی رو اعلام کرده؛ ساختار درخواست باید با API همین سرویس سازگار بشه.',
     };
-    return reasons[rejected[2]].replaceAll('Free.ai', error.code.startsWith('OR_') ? 'OpenRouter' : 'Free.ai') + ' 🌱 تکرار خودکار نداریم. کد امن: MEDIA_' + error.code;
+    return reasons[rejected[2]].replaceAll('Free.ai', error.code.startsWith('OR_') ? 'OpenRouter' : error.code.startsWith('LAO_') ? 'LaoZhang' : 'Free.ai') + ' 🌱 تکرار خودکار نداریم. کد امن: MEDIA_' + error.code;
   }
-  if (['HTTP_400', 'HTTP_422', 'OR_HTTP_400', 'OR_HTTP_422'].includes(error?.code)) return 'سرویس رسانه درخواست رو نپذیرفت؛ از کد HTTP به‌تنهایی نمی‌شه گفت مشکل مدل، صدا یا فرمت بوده 🌱 تکرار خودکار نداریم. کد امن: MEDIA_' + error.code;
+  if (['HTTP_400', 'HTTP_422', 'OR_HTTP_400', 'OR_HTTP_422', 'LAO_HTTP_400', 'LAO_HTTP_422'].includes(error?.code)) return 'سرویس رسانه درخواست رو نپذیرفت؛ از کد HTTP به‌تنهایی نمی‌شه گفت مشکل مدل، صدا یا فرمت بوده 🌱 تکرار خودکار نداریم. کد امن: MEDIA_' + error.code;
   if (error?.code === 'HTTP_402') return 'اعتبار سرویس برای ساخت عکس یا ویس کافی نیست؛ مدیر ربات باید اعتبار سرویس رسانه رو بررسی کنه 🌱';
   if (error?.code === 'HTTP_429') return 'سرویس ساخت عکس یا ویس فعلاً شلوغه؛ کمی بعد دوباره امتحان کن 🌱';
   return 'نتونستم عکس یا ویس رو بسازم یا تحویل بدم 🌱 ممکنه مدل، محدودیت محتوا یا اتصال سرویس علتش باشه. تکرار خودکار نمی‌کنم تا دوباره اعتبار مصرف نشه.';
@@ -46,7 +51,11 @@ export function mediaFailureMessage(error) {
 export function parseMediaRequest(text) {
   const clean = text.trim().replace(/[يك]/g, ch => ch === 'ي' ? 'ی' : 'ک').replace(/\u200c/g, ' ');
   let match = clean.match(/^\/(image|voice)(?:@[a-z0-9_]+)?(?:\s+([\s\S]*))?$/i);
-  if (match) return { kind: match[1].toLowerCase(), prompt: (match[2] || '').trim() };
+  if (match) {
+    const kind = match[1].toLowerCase(), prompt = (match[2] || '').trim();
+    const selected = kind === 'image' && /^(freeai|laozhang)(?:\s+([\s\S]*))?$/i.exec(prompt);
+    return selected ? { kind, provider: selected[1].toLowerCase(), prompt: (selected[2] || '').trim() } : { kind, prompt };
+  }
   match = clean.match(/^(?:لطفاً?\s+)?(?:(?:برام|برای من)\s+)?(?:(?:یه|یک)\s+)?(?:عکس|تصویر)\s+([\s\S]+?)\s+(?:بساز|بکش|درست کن)[.!؟]*$/u);
   if (match) return { kind: 'image', prompt: match[1].trim() };
   match = clean.match(/^(?:لطفاً?\s+)?(?:(?:برام|برای من)\s+)?(?:عکس|تصویر)\s+(?:بساز|بکش)[\s،,:؛]+([\s\S]+)$/u);
@@ -108,7 +117,9 @@ async function generateOpenRouterImage(env, prompt) {
     await response.body?.cancel(); throw new MediaError('DATA');
   }
   const data = JSON.parse(new TextDecoder().decode(await readBounded(response, 8 * 1024 * 1024)));
-  const item = data?.data?.[0];
+  return decodeImage(data?.data?.[0]);
+}
+function decodeImage(item) {
   const base64 = item?.b64_json;
   if (typeof base64 !== 'string' || !base64.length || base64.length > Math.ceil(MAX_FILE / 3) * 4 || !/^[A-Za-z0-9+/]+={0,2}$/.test(base64)) throw new MediaError('DATA');
   let raw;
@@ -120,6 +131,22 @@ async function generateOpenRouterImage(env, prompt) {
   const type = png ? 'image/png' : jpeg ? 'image/jpeg' : null;
   if (!type || (item.media_type && item.media_type !== type)) throw new MediaError('DATA');
   return { bytes, type, filename: png ? 'amir-image.png' : 'amir-image.jpg' };
+}
+// Explicit selection only: never rotate keys, retry, or switch providers after a charge.
+async function generateLaoZhangImage(env, prompt) {
+  const response = await (env.fetchImpl || fetch)('https://api2.laozhang.ai/v1/images/generations', {
+    method: 'POST', redirect: 'manual', signal: AbortSignal.timeout(90_000),
+    headers: { Authorization: `Bearer ${env.LAOZHANG_API_KEY.trim()}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: env.LAOZHANG_IMAGE_MODEL.trim(), prompt, n: 1, size: '1024x1024', response_format: 'b64_json' }),
+  });
+  if (!response.ok) throw await mediaRejection(response, 'laozhang');
+  // No arbitrary URL fetches, credentials on downloads, redirects or raw bodies.
+  if (!response.headers.get('Content-Type')?.toLowerCase().includes('application/json')) {
+    await response.body?.cancel(); throw new MediaError('LAOZHANG_DATA');
+  }
+  const data = JSON.parse(new TextDecoder().decode(await readBounded(response, 8 * 1024 * 1024)));
+  try { return decodeImage(data?.data?.[0]); }
+  catch (error) { if (error.code === 'SIZE') throw error; throw new MediaError('LAOZHANG_DATA'); }
 }
 export function openRouterSpeechConfiguration(env) {
   const requested = env.OPENROUTER_SPEECH_MODEL?.trim();
@@ -166,7 +193,8 @@ async function generateOpenRouterSpeech(env, answer) {
   if (!id3 && !frame) throw new MediaError('DATA');
   return { bytes, type: 'audio/mpeg', filename: 'amir-voice.mp3' };
 }
-// Owner-approved split: images remain Free.ai; voice uses OpenRouter.
+// Image requests choose Free.ai or LaoZhang; voice remains OpenRouter.
+// The low-level legacy OpenRouter image adapter remains for compatibility.
 // Legacy MEDIA_PROVIDER affects images only, so an existing 'freeai' dashboard
 // value cannot accidentally keep voice on the failing Free.ai route.
 // There is no cross-provider fallback after a failed request.
@@ -186,6 +214,9 @@ export function validateMediaConfiguration(env, kind) {
     if (!env.FREEAI_API_KEY?.trim()) throw new MediaError('FREEAI_KEY');
     // A non-default model must supply its own compatible voice.
     if (kind === 'voice') freeAISpeechConfiguration(env);
+  } else if (provider === 'laozhang' && kind === 'image') {
+    if (!env.LAOZHANG_API_KEY?.trim()) throw new MediaError('LAOZHANG_KEY');
+    if (!env.LAOZHANG_IMAGE_MODEL?.trim() || !/^[a-zA-Z0-9._/-]{1,150}$/.test(env.LAOZHANG_IMAGE_MODEL.trim())) throw new MediaError('LAOZHANG_MODEL');
   } else if (provider === 'openrouter') {
     if (!env.OPENROUTER_API_KEY?.trim()) throw new MediaError('OPENROUTER_KEY');
     if (kind === 'voice') openRouterSpeechConfiguration(env);
@@ -230,7 +261,7 @@ async function mediaRejection(response, provider = 'freeai') {
       code = classifyFreeAIRejection(response.status, data);
     } catch { /* malformed, oversized or unreadable body: keep only HTTP code */ }
   } else await response.body?.cancel();
-  if (provider === 'openrouter' && [400, 422].includes(response.status)) code = `OR_${code}`;
+  if (['openrouter', 'laozhang'].includes(provider) && [400, 422].includes(response.status)) code = `${provider === 'openrouter' ? 'OR' : 'LAO'}_${code}`;
   return new MediaError(code);
 }
 async function freeAIJson(env, endpoint, payload, timeoutMs) {
@@ -290,6 +321,7 @@ async function downloadFreeAIAsset(env, value, kind) {
 }
 export async function generateImage(env, prompt) {
   validateMediaConfiguration(env, 'image');
+  if (mediaProvider(env, 'image') === 'laozhang') return generateLaoZhangImage(env, prompt);
   if (mediaProvider(env, 'image') === 'openrouter') return generateOpenRouterImage(env, prompt);
   const data = await freeAIJson(env, 'image/generate', {
     prompt, model: env.FREEAI_IMAGE_MODEL?.trim() || 'sdxl', aspect_ratio: '1:1',

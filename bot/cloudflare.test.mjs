@@ -488,7 +488,7 @@ test('snow preview metadata gets a cleanup alarm independent of conversation his
 
 function mediaSetup() {
   const rig = setup();
-  rig.env.MEDIA_PROVIDER = 'openrouter';
+  rig.env.FREEAI_API_KEY = 'freeai-secret';
   const budgetState = new Map();
   const budget = new MediaBudgetHandler({ storage: {
     get: async key => structuredClone(budgetState.get(key)),
@@ -500,8 +500,9 @@ function mediaSetup() {
     get: () => ({ fetch: (url, options) => budget.fetch(new Request(url, options)) }),
   };
   rig.env.fetchImpl = async (url, options) => {
-    rig.calls.push({ url, body: options.body instanceof FormData ? options.body : JSON.parse(options.body) });
-    if (url.endsWith('/images')) return Response.json({ data: [{ b64_json: 'iVBORw0KGgoA', media_type: 'image/png' }] });
+    rig.calls.push({ url, body: options.body instanceof FormData ? options.body : options.body ? JSON.parse(options.body) : null });
+    if (url.endsWith('/v1/image/generate/')) return Response.json({ image_url: '/static/outputs/image.png' });
+    if (url === 'https://api.free.ai/static/outputs/image.png') return new Response(Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10, 0]), { headers: { 'Content-Type': 'image/png' } });
     if (url.endsWith('/audio/speech')) {
       if (rig.env.failSpeech) return Response.json({ error: 'private upstream detail' }, { status: 402 });
       return new Response(Uint8Array.from([73, 68, 51, 0]), { headers: { 'Content-Type': 'audio/mpeg' } });
@@ -515,8 +516,8 @@ function mediaSetup() {
 test('explicit image request uploads one real file only to the requester, default weather without a check-in timer or duplicate charge', async () => {
   const { env, state, calls, budgetState } = mediaSetup();
   const worker = createWorker();
-  await Promise.all([worker.fetch(request(update(1, 'برام یه عکس کلبه برفی بساز')), env), worker.fetch(request(update(1, 'برام یه عکس کلبه برفی بساز')), env)]);
-  assert.equal(calls.filter(call => call.url.endsWith('/images')).length, 1);
+  await Promise.all([worker.fetch(request(update(1, '/image freeai کلبه برفی')), env), worker.fetch(request(update(1, '/image freeai کلبه برفی')), env)]);
+  assert.equal(calls.filter(call => call.url.endsWith('/v1/image/generate/')).length, 1);
   const uploads = calls.filter(call => call.url.endsWith('/sendPhoto'));
   assert.equal(uploads.length, 1);
   assert.equal(uploads[0].body.get('chat_id'), '42');
@@ -557,12 +558,12 @@ test('empty/oversized prompts, disabled media, groups and unauthorized users spe
   const worker = createWorker();
   await worker.fetch(request(update(1, '/image')), env);
   await worker.fetch(request(update(2, '/voice')), env);
-  await worker.fetch(request(update(3, '/image ' + 'a'.repeat(2001))), env);
-  await worker.fetch(request(update(4, '/image snow', 99)), env);
-  const group = update(5, '/image snow'); group.message.chat.type = 'group';
+  await worker.fetch(request(update(3, '/image freeai ' + 'a'.repeat(2001))), env);
+  await worker.fetch(request(update(4, '/image freeai snow', 99)), env);
+  const group = update(5, '/image freeai snow'); group.message.chat.type = 'group';
   await worker.fetch(request(group), env);
   env.MEDIA_ENABLED = 'false';
-  await worker.fetch(request(update(6, '/image snow')), env);
+  await worker.fetch(request(update(6, '/image freeai snow')), env);
   assert.equal(calls.filter(call => call.url.includes('openrouter')).length, 0);
   assert.equal(state.has('mediaUsage'), false);
   assert.equal(budgetState.size, 0);
@@ -574,18 +575,18 @@ test('personal daily limits and shared cooldown survive /reset, history expiry a
   const { env, storage, calls, state } = mediaSetup();
   const worker = createWorker();
   await worker.fetch(request(update(1, '/voice شروع کار')), env);
-  await worker.fetch(request(update(2, '/image snow')), env);
+  await worker.fetch(request(update(2, '/image freeai snow')), env);
   assert.ok(calls.at(-1).body.text.includes('یک دقیقه'));
   now += 60_000;
-  await worker.fetch(request(update(3, '/image snow')), env);
+  await worker.fetch(request(update(3, '/image freeai snow')), env);
   for (let id = 20; id < 24; id++) {
     now += 60_000;
-    await worker.fetch(request(update(id, '/image snow')), env);
+    await worker.fetch(request(update(id, '/image freeai snow')), env);
   }
   await worker.fetch(request(update(4, '/reset')), env);
   now += 31 * 60_000;
   const recreated = new ChatSession({ storage }, env);
-  await recreated.fetch(request(update(5, '/image snow')));
+  await recreated.fetch(request(update(5, '/image freeai snow')));
   assert.ok(calls.at(-1).body.text.includes('سهمیهٔ امروزت'));
   await recreated.fetch(request(update(6, '/voice دوباره شروع')));
   now += 60_000;
@@ -593,7 +594,7 @@ test('personal daily limits and shared cooldown survive /reset, history expiry a
   now += 60_000;
   await recreated.fetch(request(update(8, '/voice بیشتر')));
   assert.ok(calls.at(-1).body.text.includes('سهمیهٔ امروزت'));
-  assert.equal(calls.filter(call => call.url.endsWith('/images')).length, 5);
+  assert.equal(calls.filter(call => call.url.endsWith('/v1/image/generate/')).length, 5);
   assert.equal(calls.filter(call => call.url.endsWith('/audio/speech')).length, 3);
   assert.equal(state.get('mediaUsage').voice, 3);
 });
@@ -617,7 +618,7 @@ test('shared exhausted or unavailable budget fails closed before any paid reques
   for (const status of [429, 503]) {
     const { env, calls, state } = mediaSetup();
     env.MEDIA.get = () => ({ fetch: async () => new Response('not available', { status }) });
-    await createWorker().fetch(request(update(1, '/image snow')), env);
+    await createWorker().fetch(request(update(1, '/image freeai snow')), env);
     assert.equal(calls.filter(call => call.url.includes('openrouter')).length, 0);
     assert.equal(state.has('mediaUsage'), false);
     if (status === 429) assert.ok(calls.at(-1).body.text.includes('کل ربات'));
@@ -629,7 +630,7 @@ test('per-chat budget cleanup alarm survives history expiry and removes only its
   t.mock.method(Date, 'now', () => now);
   const { env, session, state, calls, alarmAt } = mediaSetup();
   state.set('weatherOptOut', true); // Isolate media cleanup from weather scheduling.
-  await createWorker().fetch(request(update(1, '/image snow')), env);
+  await createWorker().fetch(request(update(1, '/image freeai snow')), env);
   calls.length = 0;
   now += 31 * 60_000;
   await session.alarm();
@@ -672,7 +673,7 @@ test('Free.ai default isolates image/speech from OpenRouter chat and still uses 
   t.mock.method(Date, 'now', () => now);
   const { env, calls, state, budgetState } = freeAIMediaSetup();
   const worker = createWorker();
-  await worker.fetch(request(update(1, '/image کلبه برفی')), env);
+  await worker.fetch(request(update(1, '/image freeai کلبه برفی')), env);
   now += 60_000;
   await worker.fetch(request(update(2, '/voice چطور شروع کنم؟')), env);
   const router = calls.filter(call => call.url.includes('openrouter.ai'));
@@ -695,7 +696,7 @@ test('missing Free.ai key or voice for a custom model never reserves budget or f
   for (const missing of ['FREEAI_API_KEY', 'FREEAI_TTS_VOICE']) {
     const { env, calls, state, budgetState } = freeAIMediaSetup();
     delete env[missing];
-    await createWorker().fetch(request(update(1, missing === 'FREEAI_API_KEY' ? '/image snow' : '/voice سلام')), env);
+    await createWorker().fetch(request(update(1, missing === 'FREEAI_API_KEY' ? '/image freeai snow' : '/voice سلام')), env);
     assert.equal(calls.filter(call => call.url.includes('openrouter') || call.url.includes('api.free.ai')).length, 0);
     assert.equal(state.has('mediaUsage'), false);
     assert.equal(budgetState.size, 0);
@@ -722,8 +723,8 @@ test('Free.ai failure or unsafe returned asset retains budget claim and never re
     return original(url, options);
   };
   const worker = createWorker();
-  await worker.fetch(request(update(1, '/image snow')), env);
-  await worker.fetch(request(update(1, '/image snow')), env);
+  await worker.fetch(request(update(1, '/image freeai snow')), env);
+  await worker.fetch(request(update(1, '/image freeai snow')), env);
   assert.equal(calls.filter(call => call.url.includes('api.free.ai')).length, 1);
   assert.equal(calls.filter(call => call.url.includes('127.0.0.1') || call.url.includes('openrouter.ai')).length, 0);
   assert.equal(state.get('mediaUsage').image, 1);
@@ -742,8 +743,8 @@ test('Free.ai permits five images per person, ten in total, and refreshes both q
   third.env.TELEGRAM_ALLOWED_USER_IDS = '44';
   const worker = createWorker();
   for (let i = 1; i <= 5; i++) {
-    await worker.fetch(request(update(i, '/image snow', 42)), first.env);
-    await worker.fetch(request(update(100 + i, '/image snow', 43)), second.env);
+    await worker.fetch(request(update(i, '/image freeai snow', 42)), first.env);
+    await worker.fetch(request(update(100 + i, '/image freeai snow', 43)), second.env);
     now += 60_000;
   }
   assert.equal(first.calls.filter(call => call.url.endsWith('/v1/image/generate/')).length, 5);
@@ -751,15 +752,15 @@ test('Free.ai permits five images per person, ten in total, and refreshes both q
   assert.equal(first.state.get('mediaUsage').image, 5);
   assert.equal(second.state.get('mediaUsage').image, 5);
   assert.equal(first.budgetState.get('budget').image, 10);
-  await worker.fetch(request(update(6, '/image sixth', 42)), first.env);
+  await worker.fetch(request(update(6, '/image freeai sixth', 42)), first.env);
   assert.ok(first.calls.at(-1).body.text.includes('پنج عکس'));
   assert.equal(first.calls.filter(call => call.url.endsWith('/v1/image/generate/')).length, 5);
-  await worker.fetch(request(update(200, '/image eleventh', 44)), third.env);
+  await worker.fetch(request(update(200, '/image freeai eleventh', 44)), third.env);
   assert.ok(third.calls.at(-1).body.text.includes('ده عکس'));
   assert.equal(third.calls.filter(call => call.url.includes('api.free.ai')).length, 0);
   assert.equal(third.state.has('mediaUsage'), false);
   now = nextMediaDay(now);
-  await worker.fetch(request(update(7, '/image new day', 42)), first.env);
+  await worker.fetch(request(update(7, '/image freeai new day', 42)), first.env);
   assert.equal(first.calls.filter(call => call.url.endsWith('/v1/image/generate/')).length, 6);
   assert.equal(first.state.get('mediaUsage').image, 1);
   assert.equal(first.budgetState.get('budget').image, 1);
@@ -818,7 +819,7 @@ test('approved default split keeps images on Free.ai but sends voice only to Ope
     return original(url, options);
   };
   const worker = createWorker();
-  await worker.fetch(request(update(1, '/image snow')), env);
+  await worker.fetch(request(update(1, '/image freeai snow')), env);
   now += 60_000;
   await worker.fetch(request(update(2, '/voice سلام')), env);
   assert.equal(calls.filter(call => call.url.endsWith('/v1/image/generate/')).length, 1);
@@ -1023,7 +1024,7 @@ function joinCallback(id = 2, user = 42) {
 }
 
 test('nonmembers cannot start, chat, use media, news, dates, prices, weather or enable paid outreach', async () => {
-  for (const text of ['/start', 'سلام', '/image منظره', '/voice سلام', '/news', '/date', '/prices', '/weather', '/test_snow', '/followup', '/alerts', '/creator bypass attempt']) {
+  for (const text of ['/start', 'سلام', '/image freeai منظره', '/voice سلام', '/news', '/date', '/prices', '/weather', '/test_snow', '/followup', '/alerts', '/creator bypass attempt']) {
     const { env, calls, state } = withMembership();
     await createWorker().fetch(request(update(1, text)), env);
     assert.ok(calls.every(c => c.url.includes('api.telegram.org')));
@@ -1415,4 +1416,165 @@ test('failed generic disclosure prevents feature-only enrollment before any gene
   f.env.fetchImpl = async () => { throw new Error('private delivery problem'); };
   await createWorker().fetch(request(update(1, '/date')), f.env);
   assert.equal(f.state.has('weather'), false); assert.equal(f.state.has('followup'), false); assert.equal(feeds, 0);
+});
+
+function dualImageSetup() {
+  const rig = freeAIMediaSetup();
+  rig.env.MEDIA_VOICE_PROVIDER = 'openrouter';
+  rig.env.LAOZHANG_API_KEY = 'private-lao-key'; rig.env.LAOZHANG_IMAGE_MODEL = 'fixture-model';
+  let messageId = 900;
+  const original = rig.env.fetchImpl;
+  rig.env.fetchImpl = async (url, options) => {
+    if (url === 'https://api2.laozhang.ai/v1/images/generations') {
+      rig.calls.push({ url, body: JSON.parse(options.body), headers: options.headers });
+      assert.equal(options.headers.Authorization, 'Bearer private-lao-key');
+      return rig.env.failLao ? new Response('private upstream secret', { status: 402 }) : Response.json({ data: [{ b64_json: 'iVBORw0KGgoA' }] });
+    }
+    const response = await original(url, options);
+    if (url.endsWith('/sendMessage') && JSON.parse(options.body).reply_markup) return Response.json({ ok: true, result: { message_id: ++messageId } });
+    return response;
+  };
+  return rig;
+}
+function imageCallback(id, choice, provider = 'freeai', user = 42) {
+  return { update_id: id, callback_query: { id: 'image-' + id, data: `imgpick:${choice.token}:${provider}`, from: { id: user }, message: { message_id: choice.messageId, chat: { id: user, type: 'private' } } } };
+}
+
+test('an image request asks for provider without spending quota, then consumes both buttons at most once', async () => {
+  const f = dualImageSetup(), worker = createWorker();
+  await worker.fetch(request(update(1, 'برام یه عکس کلبه برفی بساز')), f.env);
+  assert.equal(f.state.has('mediaUsage'), false); assert.equal(f.budgetState.size, 0);
+  assert.equal(f.calls.filter(c => /free.ai|laozhang.ai|openrouter.ai/.test(c.url)).length, 0);
+  const choice = f.state.get('session').imageChoice;
+  assert.equal(choice.prompt, 'کلبه برفی'); assert.deepEqual(f.state.get('session').messages, []);
+  const keyboard = f.calls.find(c => c.body.reply_markup)?.body.reply_markup.inline_keyboard[0];
+  assert.equal(keyboard.length, 2); assert.ok(keyboard[1].text.includes('اعتباری'));
+  await worker.fetch(request(imageCallback(2, choice)), f.env);
+  await worker.fetch(request(imageCallback(2, choice)), f.env);
+  await worker.fetch(request(imageCallback(3, choice, 'laozhang')), f.env);
+  assert.equal(f.calls.filter(c => c.url.endsWith('/sendPhoto')).length, 1);
+  assert.equal(f.calls.filter(c => c.url.includes('laozhang.ai')).length, 0);
+  assert.equal(f.state.get('mediaUsage').image, 1); assert.equal(f.budgetState.get('budget').image, 1);
+  assert.equal(f.state.get('session').imageChoice, undefined);
+});
+
+test('LaoZhang selection is request-specific, needs no Free.ai key and never changes the voice provider', async () => {
+  const f = dualImageSetup(), worker = createWorker(); delete f.env.FREEAI_API_KEY;
+  await worker.fetch(request(update(1, '/image یه کلبه')), f.env);
+  await worker.fetch(request(imageCallback(2, f.state.get('session').imageChoice, 'laozhang')), f.env);
+  assert.equal(f.calls.filter(c => c.url.includes('laozhang.ai')).length, 1);
+  assert.equal(f.calls.filter(c => c.url.includes('free.ai') || c.url.includes('openrouter.ai')).length, 0);
+  assert.equal(f.calls.filter(c => c.url.endsWith('/sendPhoto')).length, 1);
+  assert.equal(f.env.MEDIA_IMAGE_PROVIDER, undefined); assert.equal(f.env.MEDIA_VOICE_PROVIDER, 'openrouter');
+  assert.equal(f.state.get('mediaUsage').image, 1);
+});
+
+test('missing LaoZhang secrets or model consumes neither personal nor global budget and never falls back', async () => {
+  for (const missing of ['LAOZHANG_API_KEY', 'LAOZHANG_IMAGE_MODEL']) {
+    const f = dualImageSetup(), worker = createWorker(); delete f.env[missing];
+    await worker.fetch(request(update(1, '/image cabin')), f.env);
+    await worker.fetch(request(imageCallback(2, f.state.get('session').imageChoice, 'laozhang')), f.env);
+    assert.equal(f.state.has('mediaUsage'), false); assert.equal(f.budgetState.size, 0);
+    assert.equal(f.calls.filter(c => /free.ai|laozhang.ai|openrouter.ai/.test(c.url)).length, 0);
+    assert.ok(f.calls.at(-1).body.text.includes(missing));
+  }
+});
+
+test('expired, forged, cross-user or wrong-message image choices cannot trigger generation', async t => {
+  let now = 1_800_000_000_000; t.mock.method(Date, 'now', () => now);
+  const f = dualImageSetup(), worker = createWorker(); f.env.TELEGRAM_ALLOWED_USER_IDS = '*';
+  await worker.fetch(request(update(1, '/image cabin')), f.env);
+  const choice = f.state.get('session').imageChoice;
+  await worker.fetch(request(imageCallback(2, { ...choice, token: 'a'.repeat(32) })), f.env);
+  await worker.fetch(request(imageCallback(3, { ...choice, messageId: choice.messageId + 1 })), f.env);
+  await worker.fetch(request(imageCallback(4, choice, 'freeai', 43)), f.env);
+  now += 10 * 60_000 + 1;
+  await worker.fetch(request(imageCallback(5, choice)), f.env);
+  assert.equal(f.state.has('mediaUsage'), false); assert.equal(f.budgetState.size, 0);
+  assert.equal(f.calls.filter(c => /free.ai|laozhang.ai|openrouter.ai/.test(c.url)).length, 0);
+});
+
+test('both image providers share the same cooldown and five-attempt daily limit across reset', async t => {
+  let now = 1_800_000_000_000; t.mock.method(Date, 'now', () => now);
+  const f = dualImageSetup(), worker = createWorker();
+  await worker.fetch(request(update(1, '/image freeai cabin')), f.env);
+  await worker.fetch(request(update(2, '/image laozhang cabin')), f.env);
+  assert.equal(f.state.get('mediaUsage').image, 1); assert.ok(f.calls.at(-1).body.text.includes('یک دقیقه'));
+  for (let i = 0; i < 4; i++) {
+    now += 60_000; await worker.fetch(request(update(3 + i, '/image ' + (i % 2 ? 'freeai' : 'laozhang') + ' cabin')), f.env);
+  }
+  await worker.fetch(request(update(7, '/reset')), f.env);
+  now += 60_000; await worker.fetch(request(update(8, '/image laozhang cabin')), f.env);
+  assert.equal(f.state.get('mediaUsage').image, 5); assert.equal(f.budgetState.get('budget').image, 5);
+  assert.equal(f.calls.filter(c => c.url.includes('laozhang.ai')).length, 2);
+  assert.equal(f.calls.filter(c => c.url.endsWith('/v1/image/generate/')).length, 3);
+  assert.ok(f.calls.at(-1).body.text.includes('سهمیهٔ امروزت'));
+});
+
+test('an exhausted LaoZhang call keeps its quota claim without fallback, duplicated clicks or secret leakage', async () => {
+  const f = dualImageSetup(), worker = createWorker(); f.env.failLao = true;
+  await worker.fetch(request(update(1, '/image cabin')), f.env);
+  const choice = f.state.get('session').imageChoice;
+  await worker.fetch(request(imageCallback(2, choice, 'laozhang')), f.env);
+  await worker.fetch(request(imageCallback(3, choice, 'freeai')), f.env);
+  assert.equal(f.calls.filter(c => c.url.includes('laozhang.ai')).length, 1);
+  assert.equal(f.calls.filter(c => c.url.includes('free.ai') || c.url.includes('openrouter.ai') || c.url.endsWith('/sendPhoto')).length, 0);
+  assert.equal(f.state.get('mediaUsage').image, 1);
+  assert.ok(f.calls.some(c => c.body.text?.includes('اعتبار')));
+  assert.ok(!JSON.stringify(f.calls.filter(c => c.url.endsWith('/sendMessage'))).includes('private upstream secret'));
+});
+
+test('reset, start and replacement requests invalidate old choices; alarms remove expired pending prompts', async t => {
+  let now = 1_800_000_000_000; t.mock.method(Date, 'now', () => now);
+  const f = dualImageSetup(), worker = createWorker(); f.state.set('weatherOptOut', true);
+  await worker.fetch(request(update(1, '/image first')), f.env); const first = f.state.get('session').imageChoice;
+  await worker.fetch(request(update(2, '/image second')), f.env); const second = f.state.get('session').imageChoice;
+  assert.notEqual(first.token, second.token);
+  await worker.fetch(request(imageCallback(3, first)), f.env);
+  assert.equal(f.state.get('session').imageChoice.token, second.token);
+  now += 10 * 60_000; await f.session.alarm();
+  assert.equal(f.state.get('session').imageChoice, undefined); assert.equal(f.state.has('mediaUsage'), false);
+  await worker.fetch(request(update(4, '/image third')), f.env);
+  await worker.fetch(request(update(5, '/reset')), f.env); assert.equal(f.state.get('session').imageChoice, undefined);
+  await worker.fetch(request(update(6, '/image fourth')), f.env);
+  await worker.fetch(request(update(7, '/start')), f.env); assert.equal(f.state.get('session').imageChoice, undefined);
+});
+
+test('choosing an image provider still requires current membership before any media quota or API call', async () => {
+  const f = dualImageSetup(), worker = createWorker();
+  await worker.fetch(request(update(1, '/image cabin')), f.env);
+  const choice = f.state.get('session').imageChoice;
+  f.env.JOIN_REQUIRED = 'true';
+  f.session.membership.check = async () => 'left';
+  await worker.fetch(request(imageCallback(2, choice, 'laozhang')), f.env);
+  assert.equal(f.state.has('mediaUsage'), false); assert.equal(f.budgetState.size, 0);
+  assert.equal(f.calls.filter(c => /free.ai|laozhang.ai|openrouter.ai/.test(c.url)).length, 0);
+});
+
+test('a direct explicit image request invalidates any previous pending choice', async () => {
+  const f = dualImageSetup(), worker = createWorker();
+  await worker.fetch(request(update(1, '/image first')), f.env); const choice = f.state.get('session').imageChoice;
+  await worker.fetch(request(update(2, '/image freeai second')), f.env);
+  assert.equal(f.state.get('session').imageChoice, undefined);
+  await worker.fetch(request(imageCallback(3, choice, 'laozhang')), f.env);
+  assert.equal(f.calls.filter(c => c.url.includes('laozhang.ai')).length, 0);
+  assert.equal(f.calls.filter(c => c.url.endsWith('/sendPhoto')).length, 1);
+});
+
+test('ten global image attempts are shared across providers and isolated chat sessions', async t => {
+  let now = 1_800_000_000_000; t.mock.method(Date, 'now', () => now);
+  const a = dualImageSetup(), b = dualImageSetup(), c = dualImageSetup(), worker = createWorker();
+  b.env.TELEGRAM_ALLOWED_USER_IDS = '43'; c.env.TELEGRAM_ALLOWED_USER_IDS = '44';
+  b.env.MEDIA = a.env.MEDIA; c.env.MEDIA = a.env.MEDIA;
+  for (let i = 0; i < 5; i++) {
+    await worker.fetch(request(update(i + 1, '/image freeai cabin')), a.env);
+    await worker.fetch(request(update(i + 1, '/image laozhang cabin', 43)), b.env);
+    now += 60_000;
+  }
+  await worker.fetch(request(update(1, '/image laozhang cabin', 44)), c.env);
+  assert.equal(a.budgetState.get('budget').image, 10);
+  assert.equal(a.state.get('mediaUsage').image, 5); assert.equal(b.state.get('mediaUsage').image, 5);
+  assert.equal(c.state.has('mediaUsage'), false);
+  assert.equal(c.calls.filter(call => call.url.includes('laozhang.ai')).length, 0);
+  assert.ok(c.calls.at(-1).body.text.includes('کل ربات'));
 });
