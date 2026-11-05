@@ -443,3 +443,63 @@ test('LaoZhang URL-only, invalid, oversized, rejected and redirect responses nev
     if (code.includes('MODEL')) { assert.ok(mediaFailureMessage({ code }).includes('LaoZhang')); assert.ok(!mediaFailureMessage({ code }).includes('Free.ai')); }
   }
 });
+
+test('Gemini image IDs can be selected explicitly, while unrecognized Gemini models fail before any call', async () => {
+  assert.deepEqual(parseMediaRequest('/image laozhang gemini-3.1-flash-image کلبه'), { kind: 'image', provider: 'laozhang', model: 'gemini-3.1-flash-image', prompt: 'کلبه' });
+  for (const model of ['gemini-3-pro', 'gemini-3.1-flash', 'gemini-made-up-image', 'gemini-3-pro-image/../../private']) {
+    await assert.rejects(generateImage({ MEDIA_IMAGE_PROVIDER: 'laozhang', LAOZHANG_API_KEY: 'private', LAOZHANG_IMAGE_MODEL: model, fetchImpl: async () => assert.fail('Never call a textual or unknown model') }, 'کلبه'), { code: 'LAOZHANG_MODEL' });
+  }
+});
+
+test('all documented Gemini image models use the native protocol, one image and no search tools, not the generic Images API', async () => {
+  const { GEMINI_IMAGE_MODELS, isImageCallback } = await import('./media.mjs');
+  assert.equal(GEMINI_IMAGE_MODELS.length, 5);
+  for (const model of GEMINI_IMAGE_MODELS) {
+    assert.equal(isImageCallback(`imgpick:${'a'.repeat(32)}:${model.key}`), true);
+    assert.ok(`imgpick:${'a'.repeat(32)}:${model.key}`.length <= 64);
+    let calls = 0;
+    const file = await generateImage({ MEDIA_IMAGE_PROVIDER: 'laozhang', LAOZHANG_API_KEY: 'private-lao', LAOZHANG_IMAGE_MODEL: model.id, fetchImpl: async (url, options) => {
+      calls++; assert.equal(url, `https://api.laozhang.ai/v1beta/models/${model.id}:generateContent`);
+      assert.equal(options.headers.Authorization, 'Bearer private-lao'); assert.equal(options.redirect, 'manual');
+      const body = JSON.parse(options.body);
+      assert.deepEqual(body.generationConfig.responseModalities, ['IMAGE']);
+      assert.equal(body.generationConfig.imageConfig.aspectRatio, '1:1');
+      assert.equal(body.generationConfig.imageConfig.imageSize, model.key === 'g25' ? undefined : '1K');
+      assert.equal(body.contents.length, 1); assert.equal(body.tools, undefined);
+      assert.ok(body.contents[0].parts[0].text.includes('Generate exactly one image'));
+      assert.ok(body.contents[0].parts[0].text.endsWith('کلبه'));
+      return Response.json({ candidates: [{ content: { parts: [{ text: 'ignored model text' }, { inlineData: { mimeType: 'image/png', data: 'iVBORw0KGgoA' } }] } }] });
+    } }, 'کلبه');
+    assert.equal(calls, 1); assert.deepEqual(file.bytes, png);
+  }
+});
+
+test('Gemini empty/refused/text/URL/preview/invalid/multiple-image replies never get retried, downloaded or delivered as photos', async () => {
+  for (const parts of [
+    [], [{ text: 'private refusal' }], [{ fileData: { fileUri: 'http://127.0.0.1/key' } }],
+    [{ thought: true, inlineData: { mimeType: 'image/png', data: 'iVBORw0KGgoA' } }],
+    [{ inlineData: { mimeType: 'image/svg+xml', data: btoa('<svg>secret</svg>') } }],
+    [{ inlineData: { mimeType: 'image/png', data: btoa('not PNG') } }],
+    [{ inlineData: { mimeType: 'image/png', data: 'iVBORw0KGgoA' } }, { inlineData: { mimeType: 'image/png', data: 'iVBORw0KGgoA' } }],
+  ]) {
+    let calls = 0;
+    await assert.rejects(generateImage({ MEDIA_IMAGE_PROVIDER: 'laozhang', LAOZHANG_API_KEY: 'private', LAOZHANG_IMAGE_MODEL: 'gemini-3.1-flash-image', fetchImpl: async () => {
+      calls++; return Response.json({ candidates: [{ content: { parts } }] });
+    } }, 'کلبه'), { code: 'LAOZHANG_DATA' });
+    assert.equal(calls, 1);
+  }
+});
+
+test('native Gemini rejects redirects, exhausted credit, non-JSON and oversized bodies without retrying', async () => {
+  for (const [reply, code] of [
+    [() => new Response(null, { status: 302, headers: { Location: 'https://elsewhere.invalid' } }), 'HTTP_302'],
+    [() => new Response('private provider credentials', { status: 402 }), 'HTTP_402'],
+    [() => new Response('private provider credentials', { status: 429 }), 'HTTP_429'],
+    [() => new Response('private refusal', { headers: { 'Content-Type': 'text/plain' } }), 'LAOZHANG_DATA'],
+    [() => new Response('x', { headers: { 'Content-Type': 'application/json', 'Content-Length': String(9 * 1024 * 1024) } }), 'SIZE'],
+  ]) {
+    let calls = 0;
+    await assert.rejects(generateImage({ MEDIA_IMAGE_PROVIDER: 'laozhang', LAOZHANG_API_KEY: 'private', LAOZHANG_IMAGE_MODEL: 'gemini-3-pro-image', fetchImpl: async () => { calls++; return reply(); } }, 'snow'), { code });
+    assert.equal(calls, 1); assert.ok(!mediaFailureMessage({ code }).includes('private'));
+  }
+});

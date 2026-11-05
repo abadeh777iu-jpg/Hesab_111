@@ -10,7 +10,7 @@ import { WeatherAssistant, nextWeatherWake } from './weather-assistant.mjs';
 import { isCalendarQuestion, iranToday, calendarReply } from './calendar.mjs';
 import { isMarketQuestion, isWeatherQuestion } from './live-data.mjs';
 import { isNewsQuestion, newsReply, newsFailureMessage, NEWS_UNAVAILABLE } from './news.mjs';
-import { isImageCallback, IMAGE_CHOICE_TTL, parseMediaRequest, validateMediaConfiguration, PERSONAL_MEDIA_LIMITS, nextMediaDay, generateImage, generateSpeech, uploadMedia, mediaFailureMessage } from './media.mjs';
+import { GEMINI_IMAGE_MODELS, isImageCallback, IMAGE_CHOICE_TTL, parseMediaRequest, validateMediaConfiguration, PERSONAL_MEDIA_LIMITS, nextMediaDay, generateImage, generateSpeech, uploadMedia, mediaFailureMessage } from './media.mjs';
 
 const TTL = 30 * 60_000;
 export const FOLLOWUP_NOTICE = OUTREACH_NOTICE;
@@ -510,17 +510,19 @@ export class ChatSession {
     await this.scheduleAlarm();
     return null;
   }
-  async offerImageChoice(chat, prompt, record) {
+  async offerImageChoice(chat, prompt, record, stage = 'provider', expiresAt = Date.now() + IMAGE_CHOICE_TTL) {
     const token = crypto.randomUUID().replaceAll('-', '');
     // Only one pending prompt per chat, never included in model history.
-    record.imageChoice = { token, prompt, chatId: chat, expiresAt: Date.now() + IMAGE_CHOICE_TTL };
+    record.imageChoice = { token, prompt, stage, chatId: chat, expiresAt };
     await this.persist(record);
+    const options = stage === 'model'
+      ? GEMINI_IMAGE_MODELS.map(model => [{ text: model.label, callback_data: `imgpick:${token}:${model.key}` }])
+      : [[{ text: 'Free.ai', callback_data: `imgpick:${token}:freeai` }, { text: 'LaoZhang · Gemini اعتباری', callback_data: `imgpick:${token}:laozhang` }]];
     const message = await this.telegram('sendMessage', { chat_id: chat,
-      text: 'عکس رو با کدوم سرویس بسازم؟ 🎨\nLaoZhang از اعتبار همون حساب مصرف می‌کنه؛ اگر اعتبار نداشته باشه انجام نمی‌شه. سقف مصرف هر دو مشترکه.',
-      reply_markup: { inline_keyboard: [[
-        { text: 'Free.ai', callback_data: `imgpick:${token}:freeai` },
-        { text: 'LaoZhang · اعتباری', callback_data: `imgpick:${token}:laozhang` },
-      ]] } });
+      text: stage === 'model'
+        ? 'کدوم مدل تصویری Gemini رو می‌خوای؟ 🎨\nهمه از اعتبار LaoZhang مصرف می‌کنن؛ قیمت و دسترسی طبق حسابته. هر انتخاب فقط یک عکس و از سهمیهٔ مشترکه؛ اگر خطا بده، خودکار مدل دیگه‌ای امتحان نمی‌کنم.'
+        : 'عکس رو با کدوم سرویس بسازم؟ 🎨\nLaoZhang از اعتبار همون حساب مصرف می‌کنه؛ اگر اعتبار نداشته باشه انجام نمی‌شه. سقف مصرف هر دو مشترکه.',
+      reply_markup: { inline_keyboard: options } });
     if (!Number.isSafeInteger(message?.message_id)) { delete record.imageChoice; await this.persist(record); return; }
     record.imageChoice.messageId = message.message_id;
     await this.persist(record);
@@ -528,13 +530,15 @@ export class ChatSession {
   async chooseImageProvider(chat, callback, record) {
     const [, token, provider] = callback.data.split(':');
     const choice = record.imageChoice;
-    if (!choice || choice.chatId !== chat || choice.token !== token || choice.expiresAt <= Date.now() || choice.messageId !== callback.message.message_id) {
+    const model = GEMINI_IMAGE_MODELS.find(model => model.key === provider);
+    if ((choice?.stage === 'model' ? !model : !!model) || !choice || choice.chatId !== chat || choice.token !== token || choice.expiresAt <= Date.now() || choice.messageId !== callback.message.message_id) {
       await this.send(chat, 'این انتخاب منقضی یا قبلاً استفاده شده؛ دوباره درخواست عکس رو بفرست 🌱'); return;
     }
     // Consume both buttons before any quota reservation, generation or upload.
     delete record.imageChoice; await this.persist(record);
     await this.telegram('editMessageReplyMarkup', { chat_id: chat, message_id: callback.message.message_id, reply_markup: { inline_keyboard: [] } }).catch(() => {});
-    await this.handleMedia(chat, { kind: 'image', prompt: choice.prompt, provider }, record);
+    if (provider === 'laozhang') { await this.offerImageChoice(chat, choice.prompt, record, 'model', choice.expiresAt); return; }
+    await this.handleMedia(chat, { kind: 'image', prompt: choice.prompt, provider: model ? 'laozhang' : provider, ...(model ? { model: model.id } : {}) }, record);
   }
   async handleMedia(chat, request, record) {
     const { kind, prompt } = request;
@@ -553,8 +557,9 @@ export class ChatSession {
     }
     if (kind === 'image' && !request.provider) { await this.offerImageChoice(chat, prompt, record); return; }
     if (kind === 'image' && !['freeai', 'laozhang'].includes(request.provider)) { await this.send(chat, 'سرویس تصویر نامعتبره 🌱'); return; }
+    if (kind === 'image' && request.provider === 'laozhang' && !request.model && !this.env.LAOZHANG_IMAGE_MODEL?.trim()) { await this.offerImageChoice(chat, prompt, record, 'model'); return; }
     if (kind === 'image' && record.imageChoice) { delete record.imageChoice; await this.persist(record); }
-    const mediaEnv = kind === 'image' ? { ...this.env, MEDIA_IMAGE_PROVIDER: request.provider } : this.env;
+    const mediaEnv = kind === 'image' ? { ...this.env, MEDIA_IMAGE_PROVIDER: request.provider, ...(request.model ? { LAOZHANG_IMAGE_MODEL: request.model } : {}) } : this.env;
     try {
       validateMediaConfiguration(mediaEnv, kind);
       const denied = await this.reserveMedia(kind);

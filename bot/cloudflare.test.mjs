@@ -1425,10 +1425,12 @@ function dualImageSetup() {
   let messageId = 900;
   const original = rig.env.fetchImpl;
   rig.env.fetchImpl = async (url, options) => {
-    if (url === 'https://api2.laozhang.ai/v1/images/generations') {
+    if (url === 'https://api2.laozhang.ai/v1/images/generations' || url.startsWith('https://api.laozhang.ai/v1beta/models/')) {
       rig.calls.push({ url, body: JSON.parse(options.body), headers: options.headers });
       assert.equal(options.headers.Authorization, 'Bearer private-lao-key');
-      return rig.env.failLao ? new Response('private upstream secret', { status: 402 }) : Response.json({ data: [{ b64_json: 'iVBORw0KGgoA' }] });
+      return rig.env.failLao ? new Response('private upstream secret', { status: 402 }) : Response.json(url.includes('/v1beta/')
+        ? { candidates: [{ content: { parts: [{ inlineData: { mimeType: 'image/png', data: 'iVBORw0KGgoA' } }] } }] }
+        : { data: [{ b64_json: 'iVBORw0KGgoA' }] });
     }
     const response = await original(url, options);
     if (url.endsWith('/sendMessage') && JSON.parse(options.body).reply_markup) return Response.json({ ok: true, result: { message_id: ++messageId } });
@@ -1462,6 +1464,8 @@ test('LaoZhang selection is request-specific, needs no Free.ai key and never cha
   const f = dualImageSetup(), worker = createWorker(); delete f.env.FREEAI_API_KEY;
   await worker.fetch(request(update(1, '/image یه کلبه')), f.env);
   await worker.fetch(request(imageCallback(2, f.state.get('session').imageChoice, 'laozhang')), f.env);
+  assert.equal(f.state.has('mediaUsage'), false);
+  await worker.fetch(request(imageCallback(3, f.state.get('session').imageChoice, 'g31')), f.env);
   assert.equal(f.calls.filter(c => c.url.includes('laozhang.ai')).length, 1);
   assert.equal(f.calls.filter(c => c.url.includes('free.ai') || c.url.includes('openrouter.ai')).length, 0);
   assert.equal(f.calls.filter(c => c.url.endsWith('/sendPhoto')).length, 1);
@@ -1469,11 +1473,12 @@ test('LaoZhang selection is request-specific, needs no Free.ai key and never cha
   assert.equal(f.state.get('mediaUsage').image, 1);
 });
 
-test('missing LaoZhang secrets or model consumes neither personal nor global budget and never falls back', async () => {
-  for (const missing of ['LAOZHANG_API_KEY', 'LAOZHANG_IMAGE_MODEL']) {
+test('missing LaoZhang secret consumes neither personal nor global budget and never falls back', async () => {
+  for (const missing of ['LAOZHANG_API_KEY']) {
     const f = dualImageSetup(), worker = createWorker(); delete f.env[missing];
     await worker.fetch(request(update(1, '/image cabin')), f.env);
     await worker.fetch(request(imageCallback(2, f.state.get('session').imageChoice, 'laozhang')), f.env);
+    await worker.fetch(request(imageCallback(3, f.state.get('session').imageChoice, 'g31')), f.env);
     assert.equal(f.state.has('mediaUsage'), false); assert.equal(f.budgetState.size, 0);
     assert.equal(f.calls.filter(c => /free.ai|laozhang.ai|openrouter.ai/.test(c.url)).length, 0);
     assert.ok(f.calls.at(-1).body.text.includes(missing));
@@ -1516,7 +1521,9 @@ test('an exhausted LaoZhang call keeps its quota claim without fallback, duplica
   await worker.fetch(request(update(1, '/image cabin')), f.env);
   const choice = f.state.get('session').imageChoice;
   await worker.fetch(request(imageCallback(2, choice, 'laozhang')), f.env);
-  await worker.fetch(request(imageCallback(3, choice, 'freeai')), f.env);
+  const models = f.state.get('session').imageChoice;
+  await worker.fetch(request(imageCallback(3, models, 'g31')), f.env);
+  await worker.fetch(request(imageCallback(4, models, 'g25')), f.env);
   assert.equal(f.calls.filter(c => c.url.includes('laozhang.ai')).length, 1);
   assert.equal(f.calls.filter(c => c.url.includes('free.ai') || c.url.includes('openrouter.ai') || c.url.endsWith('/sendPhoto')).length, 0);
   assert.equal(f.state.get('mediaUsage').image, 1);
@@ -1577,4 +1584,51 @@ test('ten global image attempts are shared across providers and isolated chat se
   assert.equal(c.state.has('mediaUsage'), false);
   assert.equal(c.calls.filter(call => call.url.includes('laozhang.ai')).length, 0);
   assert.ok(c.calls.at(-1).body.text.includes('کل ربات'));
+});
+
+test('LaoZhang offers every documented Gemini image model before charging, without a configured default', async () => {
+  const f = dualImageSetup(), worker = createWorker(); delete f.env.LAOZHANG_IMAGE_MODEL;
+  await worker.fetch(request(update(1, '/image کلبه')), f.env);
+  const providers = f.state.get('session').imageChoice;
+  // A forged model button cannot skip the provider stage.
+  await worker.fetch(request(imageCallback(2, providers, 'gpro')), f.env);
+  assert.equal(f.state.get('session').imageChoice.token, providers.token);
+  await worker.fetch(request(imageCallback(3, providers, 'laozhang')), f.env);
+  const models = f.state.get('session').imageChoice;
+  assert.equal(models.stage, 'model'); assert.notEqual(models.token, providers.token);
+  assert.equal(models.expiresAt, providers.expiresAt); // Stage change never extends prompt retention.
+  const keyboard = f.calls.filter(c => c.body.reply_markup?.inline_keyboard?.length === 5).at(-1).body.reply_markup.inline_keyboard;
+  assert.equal(keyboard.flat().length, 5);
+  assert.equal(new Set(keyboard.flat().map(button => button.callback_data.split(':')[2])).size, 5);
+  assert.equal(f.state.has('mediaUsage'), false); assert.equal(f.budgetState.size, 0);
+  await worker.fetch(request(imageCallback(4, models, 'freeai')), f.env); // wrong stage
+  assert.equal(f.state.get('session').imageChoice.token, models.token);
+  await worker.fetch(request(imageCallback(5, models, 'gpro')), f.env);
+  assert.equal(f.state.get('mediaUsage').image, 1); assert.equal(f.budgetState.get('budget').image, 1);
+  assert.ok(f.calls.some(call => call.url === 'https://api.laozhang.ai/v1beta/models/gemini-3-pro-image:generateContent'));
+  assert.equal(f.env.LAOZHANG_IMAGE_MODEL, undefined);
+  await worker.fetch(request(imageCallback(6, models, 'glite')), f.env);
+  assert.equal(f.calls.filter(call => call.url.includes('laozhang.ai')).length, 1);
+});
+
+test('the direct LaoZhang command with no default model asks for a Gemini model without spending quota', async () => {
+  const f = dualImageSetup(), worker = createWorker(); delete f.env.LAOZHANG_IMAGE_MODEL;
+  await worker.fetch(request(update(1, '/image laozhang کلبه')), f.env);
+  assert.equal(f.state.get('session').imageChoice.stage, 'model'); assert.equal(f.state.has('mediaUsage'), false);
+  await worker.fetch(request(imageCallback(2, f.state.get('session').imageChoice, 'glite')), f.env);
+  assert.equal(f.calls.filter(call => call.url.endsWith('/sendPhoto')).length, 1);
+});
+
+test('direct per-request Gemini choices share the existing cooldown, quotas and no-fallback rule', async t => {
+  let now = 1_800_000_000_000; t.mock.method(Date, 'now', () => now);
+  const f = dualImageSetup(), worker = createWorker(); delete f.env.LAOZHANG_IMAGE_MODEL;
+  await worker.fetch(request(update(1, '/image laozhang gemini-3.1-flash-image کلبه')), f.env);
+  await worker.fetch(request(update(2, '/image laozhang gemini-3-pro-image کلبه')), f.env);
+  assert.equal(f.state.get('mediaUsage').image, 1); assert.ok(f.calls.at(-1).body.text.includes('یک دقیقه'));
+  now += 60_000;
+  await worker.fetch(request(update(3, '/image freeai کلبه')), f.env);
+  assert.equal(f.state.get('mediaUsage').image, 2); assert.equal(f.budgetState.get('budget').image, 2);
+  now += 60_000;
+  await worker.fetch(request(update(4, '/image laozhang gemini-3-pro کلبه')), f.env);
+  assert.equal(f.state.get('mediaUsage').image, 2); assert.equal(f.calls.filter(call => call.url.includes('laozhang.ai')).length, 1);
 });

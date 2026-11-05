@@ -7,7 +7,7 @@ import { makeWav } from './fixtures/audio.mjs';
 
 // Exercise actual Workers binary decoding + multipart upload, not Node-only mocks.
 // Both upstream services are local fake bindings: no tokens or live paid calls.
-for (const provider of ['openrouter', 'freeai', 'mixed', 'laozhang']) test(`Workers ${provider} media runtime decodes files and uploads multipart attachments`, async t => {
+for (const provider of ['openrouter', 'freeai', 'mixed', 'laozhang', 'gemini']) test(`Workers ${provider} media runtime decodes files and uploads multipart attachments`, async t => {
   const helperPath = fileURLToPath(new URL('./media.mjs', import.meta.url));
   const entryPath = fileURLToPath(new URL('./media-runtime-entry.mjs', import.meta.url));
   const audioPath = fileURLToPath(new URL('./audio.mjs', import.meta.url));
@@ -15,12 +15,18 @@ for (const provider of ['openrouter', 'freeai', 'mixed', 'laozhang']) test(`Work
   const mf = new Miniflare(convertV4MiniflareOptions({ workers: [{
     name: 'media-runtime-test', compatibilityDate: '2026-10-01',
     modules: [{ type: 'ESModule', path: entryPath, contents: `
-      import { generateImage, generateSpeech, uploadMedia } from './media.mjs';
+      import { GEMINI_IMAGE_MODELS, generateImage, generateSpeech, uploadMedia } from './media.mjs';
       export default { async fetch(request, bindings) {
-        const env = { MEDIA_PROVIDER: '${provider === 'mixed' ? 'freeai' : provider}', ${provider === 'mixed' ? '' : `MEDIA_VOICE_PROVIDER: '${provider === 'laozhang' ? 'openrouter' : provider}',`} OPENROUTER_API_KEY: 'fake-key', TELEGRAM_BOT_TOKEN: 'fake-token',
-          FREEAI_API_KEY: 'fake-free-key', LAOZHANG_API_KEY: 'fake-lao-key', LAOZHANG_IMAGE_MODEL: 'fixture-image-model',
+        const env = { MEDIA_PROVIDER: '${provider === 'mixed' ? 'freeai' : provider === 'gemini' ? 'laozhang' : provider}', ${provider === 'mixed' ? '' : `MEDIA_VOICE_PROVIDER: '${['laozhang', 'gemini'].includes(provider) ? 'openrouter' : provider}',`} OPENROUTER_API_KEY: 'fake-key', TELEGRAM_BOT_TOKEN: 'fake-token',
+          FREEAI_API_KEY: 'fake-free-key', LAOZHANG_API_KEY: 'fake-lao-key', LAOZHANG_IMAGE_MODEL: '${provider === 'gemini' ? 'gemini-3.1-flash-image' : 'fixture-image-model'}',
           fetchImpl: (url, options) => bindings.UPSTREAM.fetch(url, options) };
         try {
+          if ('${provider}' === 'gemini') {
+            for (const model of GEMINI_IMAGE_MODELS) {
+              const file = await generateImage({ ...env, LAOZHANG_IMAGE_MODEL: model.id }, 'snow');
+              await uploadMedia(env, 42, 'image', file);
+            }
+          }
           const image = await generateImage(env, 'snow');
           await uploadMedia(env, 42, 'image', image);
           const speech = await generateSpeech(env, 'سلام رفیق');
@@ -48,6 +54,14 @@ for (const provider of ['openrouter', 'freeai', 'mixed', 'laozhang']) test(`Work
           if (url.pathname.endsWith('.wav')) return new Response(Uint8Array.from(atob('${Buffer.from(makeWav()).toString('base64')}'), ch => ch.charCodeAt(0)), { headers: { 'Content-Type': 'audio/wav' } });
         }
         return new Response('Unexpected Free.ai request', { status: 400 });
+      }
+      if (url.hostname === 'api.laozhang.ai') {
+        const body = await request.json();
+        if (request.headers.get('Authorization') !== 'Bearer fake-lao-key' ||
+          !/^\\/v1beta\\/models\\/gemini-[a-z0-9.-]+:generateContent$/.test(url.pathname) ||
+          body.generationConfig?.responseModalities?.[0] !== 'IMAGE' || body.tools ||
+          !body.contents?.[0]?.parts?.[0]?.text?.includes('Generate exactly one image')) return new Response('Bad Gemini request', { status: 400 });
+        return Response.json({ candidates: [{ content: { parts: [{ inlineData: { mimeType: 'image/png', data: 'iVBORw0KGgoA' } }] } }] });
       }
       if (url.hostname === 'api2.laozhang.ai') {
         const body = await request.json();

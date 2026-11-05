@@ -16,14 +16,23 @@ export const DEFAULT_FREEAI_SPEECH_MODEL = 'piper';
 // availability still needs a live user test; overrides remain supported.
 export const DEFAULT_FREEAI_VOICE = 'fa_IR-amir-medium';
 export const IMAGE_CHOICE_TTL = 10 * 60_000;
-export const isImageCallback = value => typeof value === 'string' && /^imgpick:[a-f0-9]{32}:(freeai|laozhang)$/.test(value);
+// Documented Gemini image models only, not the textual Gemini catalog.
+// Snapshot: https://docs.laozhang.ai/en/api-capabilities/nano-banana-image
+export const GEMINI_IMAGE_MODELS = Object.freeze([
+  Object.freeze({ key: 'g25', id: 'gemini-2.5-flash-image', label: 'Gemini 2.5 Flash Image · قدیمی' }),
+  Object.freeze({ key: 'glite', id: 'gemini-3.1-flash-lite-image', label: 'Gemini 3.1 Flash Lite Image' }),
+  Object.freeze({ key: 'g21', id: 'gemini-nano-banana-2.1', label: 'Nano Banana 2.1' }),
+  Object.freeze({ key: 'g31', id: 'gemini-3.1-flash-image', label: 'Gemini 3.1 Flash Image' }),
+  Object.freeze({ key: 'gpro', id: 'gemini-3-pro-image', label: 'Gemini 3 Pro Image' }),
+]);
+export const isImageCallback = value => typeof value === 'string' && /^imgpick:[a-f0-9]{32}:(freeai|laozhang|g25|glite|g21|g31|gpro)$/.test(value);
 const MAX_FILE = 5 * 1024 * 1024;
 export class MediaError extends Error {
   constructor(code) { super('Media request failed'); this.code = code; }
 }
 export function mediaFailureMessage(error) {
   if (error?.code === 'LAOZHANG_KEY') return 'LaoZhang هنوز وصل نشده 🌱 مدیر باید LAOZHANG_API_KEY رو فقط در Secrets کلودفلر ثبت کنه؛ کلید رو در چت نفرست. می‌تونی درخواست تازه رو با Free.ai بفرستی.';
-  if (error?.code === 'LAOZHANG_MODEL') return 'مدل عکس LaoZhang هنوز تنظیم نشده 🌱 مدیر باید LAOZHANG_IMAGE_MODEL رو مطابق مدل مجاز حساب تنظیم کنه؛ هنوز سهمیه یا اعتباری مصرف نشده.';
+  if (error?.code === 'LAOZHANG_MODEL') return 'مدل عکس LaoZhang تنظیم نشده یا در مسیر انتخابی پشتیبانی نمی‌شه 🌱 از فهرست مدل‌های تصویری انتخاب کن؛ تنظیم دستی: LAOZHANG_IMAGE_MODEL. هنوز سهمیه یا اعتباری مصرف نشده.';
   if (error?.code === 'LAOZHANG_DATA') return 'LaoZhang عکس PNG یا JPEG به‌صورت base64 برنگردوند؛ مدل باید با این خروجی سازگار باشه 🌱 برای جلوگیری از هزینهٔ دوباره خودکار تکرار نمی‌کنم.';
   if (error?.code === 'OR_VOICE_CONFIG') return 'تنظیم صدای OpenRouter با مدل انتخابی سازگار نیست 🌱 نام صدا را از فهرست همان مدل انتخاب کنید؛ برای این درخواست اعتباری مصرف نشد.';
   if (error?.code === 'OPENROUTER_KEY') return 'برای ویس، کلید OpenRouter باید در Secrets ربات تنظیم باشه 🌱 کلید رو در چت نفرست؛ عکس از سرویس انتخابی خودت استفاده می‌کنه.';
@@ -54,7 +63,10 @@ export function parseMediaRequest(text) {
   if (match) {
     const kind = match[1].toLowerCase(), prompt = (match[2] || '').trim();
     const selected = kind === 'image' && /^(freeai|laozhang)(?:\s+([\s\S]*))?$/i.exec(prompt);
-    return selected ? { kind, provider: selected[1].toLowerCase(), prompt: (selected[2] || '').trim() } : { kind, prompt };
+    if (!selected) return { kind, prompt };
+    const provider = selected[1].toLowerCase(), rest = (selected[2] || '').trim();
+    const model = provider === 'laozhang' && /^(gemini-[a-z0-9._/-]+)(?:\s+([\s\S]*))?$/i.exec(rest);
+    return model ? { kind, provider, model: model[1], prompt: (model[2] || '').trim() } : { kind, provider, prompt: rest };
   }
   match = clean.match(/^(?:لطفاً?\s+)?(?:(?:برام|برای من)\s+)?(?:(?:یه|یک)\s+)?(?:عکس|تصویر)\s+([\s\S]+?)\s+(?:بساز|بکش|درست کن)[.!؟]*$/u);
   if (match) return { kind: 'image', prompt: match[1].trim() };
@@ -134,6 +146,7 @@ function decodeImage(item) {
 }
 // Explicit selection only: never rotate keys, retry, or switch providers after a charge.
 async function generateLaoZhangImage(env, prompt) {
+  if (GEMINI_IMAGE_MODELS.some(model => model.id === env.LAOZHANG_IMAGE_MODEL.trim())) return generateGeminiImage(env, prompt);
   const response = await (env.fetchImpl || fetch)('https://api2.laozhang.ai/v1/images/generations', {
     method: 'POST', redirect: 'manual', signal: AbortSignal.timeout(90_000),
     headers: { Authorization: `Bearer ${env.LAOZHANG_API_KEY.trim()}`, 'Content-Type': 'application/json' },
@@ -146,6 +159,31 @@ async function generateLaoZhangImage(env, prompt) {
   }
   const data = JSON.parse(new TextDecoder().decode(await readBounded(response, 8 * 1024 * 1024)));
   try { return decodeImage(data?.data?.[0]); }
+  catch (error) { if (error.code === 'SIZE') throw error; throw new MediaError('LAOZHANG_DATA'); }
+}
+async function generateGeminiImage(env, prompt) {
+  const model = env.LAOZHANG_IMAGE_MODEL.trim();
+  // The closed model list was validated before reservation. Never accept a URL,
+  // use Google credentials, turn on search tools or fan out to other models.
+  const imageConfig = { aspectRatio: '1:1', ...(model === 'gemini-2.5-flash-image' ? {} : { imageSize: '1K' }) };
+  const response = await (env.fetchImpl || fetch)(`https://api.laozhang.ai/v1beta/models/${model}:generateContent`, {
+    method: 'POST', redirect: 'manual', signal: AbortSignal.timeout(90_000),
+    headers: { Authorization: `Bearer ${env.LAOZHANG_API_KEY.trim()}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      contents: [{ role: 'user', parts: [{ text: 'Generate exactly one image for this description, not a text-only answer.\n\n' + prompt }] }],
+      generationConfig: { responseModalities: ['IMAGE'], imageConfig },
+    }),
+  });
+  if (!response.ok) throw await mediaRejection(response, 'laozhang');
+  if (!response.headers.get('Content-Type')?.toLowerCase().includes('application/json')) {
+    await response.body?.cancel(); throw new MediaError('LAOZHANG_DATA');
+  }
+  const data = JSON.parse(new TextDecoder().decode(await readBounded(response, 8 * 1024 * 1024)));
+  const parts = data?.candidates?.[0]?.content?.parts;
+  const images = Array.isArray(parts) ? parts.filter(part => !part?.thought && part?.inlineData) : [];
+  // Never send reasoning previews, unsafe URLs or text refusals as image files.
+  if (images.length !== 1 || !['image/png', 'image/jpeg'].includes(images[0].inlineData.mimeType)) throw new MediaError('LAOZHANG_DATA');
+  try { return decodeImage({ b64_json: images[0].inlineData.data, media_type: images[0].inlineData.mimeType }); }
   catch (error) { if (error.code === 'SIZE') throw error; throw new MediaError('LAOZHANG_DATA'); }
 }
 export function openRouterSpeechConfiguration(env) {
@@ -216,7 +254,8 @@ export function validateMediaConfiguration(env, kind) {
     if (kind === 'voice') freeAISpeechConfiguration(env);
   } else if (provider === 'laozhang' && kind === 'image') {
     if (!env.LAOZHANG_API_KEY?.trim()) throw new MediaError('LAOZHANG_KEY');
-    if (!env.LAOZHANG_IMAGE_MODEL?.trim() || !/^[a-zA-Z0-9._/-]{1,150}$/.test(env.LAOZHANG_IMAGE_MODEL.trim())) throw new MediaError('LAOZHANG_MODEL');
+    const model = env.LAOZHANG_IMAGE_MODEL?.trim();
+    if (!model || !/^[a-zA-Z0-9._/-]{1,150}$/.test(model) || (/^gemini/i.test(model) && !GEMINI_IMAGE_MODELS.some(item => item.id === model))) throw new MediaError('LAOZHANG_MODEL');
   } else if (provider === 'openrouter') {
     if (!env.OPENROUTER_API_KEY?.trim()) throw new MediaError('OPENROUTER_KEY');
     if (kind === 'voice') openRouterSpeechConfiguration(env);
