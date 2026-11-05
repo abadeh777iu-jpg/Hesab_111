@@ -15,8 +15,8 @@ export async function generateWeatherSentence(env, event, session) {
       body: JSON.stringify({
         model: env.OPENROUTER_MODEL, temperature: 0.95, max_tokens: 120,
         messages: [{ role: 'system', content:
-          'با لحن صمیمی امیر، فقط یک جملهٔ تازه و کوتاه فارسی، حدود ۸ تا ۲۵ کلمه، برای همراهی با خبر هوا بنویس. جمله برای همین مخاطب تولید می‌شود؛ از متن آماده، نقل‌قول مشهور، انتساب به شاعر یا ادعای شناخت شخصی استفاده نکن. یک یا دو ایموجی مناسب کافی است. اگر لحن gentle داده شد، آرام‌تر و بدون فشار برای اقدام بنویس؛ در لحن warm گرم و دلگرم‌کننده باش. هیچ نام، شغل، راز، مشکل، بیماری، جزئیات یا عبارت خصوصی برای مخاطب نساز. از وابسته‌کردن عاطفی، قول موفقیت یا خوب‌شدن حال، قضاوت و مثبت‌اندیشی اجباری دوری کن. اگر بارش شدید است، آرام و مراقبت‌محور باش و کسی را به بیرون‌رفتن دعوت نکن. هیچ پیش‌بینی هوا، زمان، عدد، لینک، هشتگ، نقل‌قول، توضیح اضافه، HTML یا Markdown تولید نکن. چیزی دربارهٔ زندگی یا احساس واقعی مخاطب فرض نکن. فقط خودِ جمله، در یک خط.' },
-        { role: 'user', content: JSON.stringify({ weather: event.kind, severe: !!event.severe, variation, tone }) }],
+          'با لحن صمیمی امیر، فقط یک جملهٔ تازه و کوتاه فارسی، حدود ۸ تا ۲۵ کلمه، برای همراهی با خبر هوا بنویس. جمله برای همین مخاطب تولید می‌شود؛ از متن آماده، نقل‌قول مشهور، انتساب به شاعر یا ادعای شناخت شخصی استفاده نکن. یک یا دو ایموجی مناسب کافی است. اگر لحن gentle داده شد، آرام‌تر و بدون فشار برای اقدام بنویس؛ در لحن warm گرم و دلگرم‌کننده باش. باران، برف و هوای ابری را برای همه لذت‌بخش فرض نکن؛ فقط اگر دوستش دارد با تصویرسازی کوتاه همراهی کن، نه وعدهٔ عوض‌شدن حال. خطر بارش شدید را رمانتیک نکن. هیچ نام، شغل، راز، مشکل، بیماری، جزئیات یا عبارت خصوصی برای مخاطب نساز. از وابسته‌کردن عاطفی، قول موفقیت یا خوب‌شدن حال، قضاوت و مثبت‌اندیشی اجباری دوری کن. اگر بارش شدید است، آرام و مراقبت‌محور باش و کسی را به بیرون‌رفتن دعوت نکن. هیچ پیش‌بینی هوا، زمان، عدد، لینک، هشتگ، نقل‌قول، توضیح اضافه، HTML یا Markdown تولید نکن. چیزی دربارهٔ زندگی یا احساس واقعی مخاطب فرض نکن. فقط خودِ جمله، در یک خط.' },
+        { role: 'user', content: JSON.stringify({ weather: event.kind, severe: !!(event.severe || event.unsafe), variation, tone }) }],
       }),
       signal: AbortSignal.timeout(8000),
     });
@@ -28,6 +28,7 @@ export async function generateWeatherSentence(env, event, session) {
     // Prevent obvious leaks/markup and reject verbose outputs instead of cutting
     // them into a misleading fragment. Never delay or replace the factual alert.
     if (sentence.length < 8 || sentence.length > 240 || /[\r\n<>\[\]@0-9۰-۹٠-٩]|https?:|www\./iu.test(sentence)) return null;
+    if ((event.severe || event.unsafe) && /بیرون|قدم بزن|پیاده|تفریح|لذت ببر|زیر بارون|زیر برف/.test(sentence)) return null;
     return sentence;
   } catch {
     // Raw fetch errors may contain request secrets. Do not log them.

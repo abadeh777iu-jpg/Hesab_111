@@ -107,3 +107,13 @@ test('a job expiring during capacity admission cannot be claimed for a late prov
   assert.equal((await inbox.peek()).id, 'u1'); now += INBOX_TTL;
   assert.equal(await inbox.claim('u1'), null); assert.equal(state.get('inbox').active, null);
 });
+
+test('channelstop is prioritized, cancels queued channelauto, and global stop cancels automatic-post re-enrollment', async () => {
+  const { state, storage } = memory(), inbox = new DurableInbox(storage);
+  await inbox.admit(update(1, '/channelauto'), async () => true);
+  await inbox.admit(update(2, '/channelstop'), async () => true);
+  assert.deepEqual(state.get('inbox').pending.map(j => j.update.message.text), ['/channelstop']);
+  await inbox.admit(update(3, '/channelauto'), async () => true);
+  await inbox.admit(update(4, '/stop'), async () => true);
+  assert.ok(!state.get('inbox').pending.some(j => j.update.message.text === '/channelauto'));
+});

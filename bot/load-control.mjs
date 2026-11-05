@@ -7,7 +7,7 @@ export const BUSY_TEXT = 'درخواست‌ها زیاد شده و صف فعلا
 export const EXPIRED_TEXT = 'درخواست قبلی بیش از حد در صف موند و پردازش نشد؛ اگر هنوز لازمش داری دوباره بفرست 🌱';
 export const asyncUpdates = env => env.BOT_ASYNC_UPDATES !== 'false';
 export const updateCommand = update => (update.message?.text || '').trim().split(/\s/)[0].split('@')[0].toLowerCase();
-export const priorityUpdate = update => ['/stop', '/reset', '/start', '/weatherstop', '/forgetcity', '/privacy'].includes(updateCommand(update));
+export const priorityUpdate = update => ['/stop', '/reset', '/start', '/weatherstop', '/forgetcity', '/privacy', '/channelstop'].includes(updateCommand(update));
 export function compactUpdate(update, webhookURL) {
   const out = { update_id: update.update_id, webhookURL };
   const user = from => ({ id: from.id, is_bot: false });
@@ -38,8 +38,8 @@ export class DurableInbox {
       // A later /start must not silently cancel a queued opt-out.
       if (priorityUpdate(j.update)) return true; removed.push(j); return false;
     });
-    if (['/stop', '/weatherstop'].includes(command)) state.pending = state.pending.filter(j => {
-      if (['/followup', '/alerts'].includes(updateCommand(j.update))) { removed.push(j); return false; } return true;
+    if (['/stop', '/weatherstop', '/channelstop'].includes(command)) state.pending = state.pending.filter(j => {
+      if ((command === '/channelstop' ? ['/channelauto'] : ['/followup', '/alerts', '/channelauto']).includes(updateCommand(j.update))) { removed.push(j); return false; } return true;
     });
     const full = state.pending.length >= INBOX_LIMIT + (priorityUpdate(update) ? 1 : 0);
     const id = 'u' + update.update_id;

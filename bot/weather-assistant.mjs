@@ -1,6 +1,6 @@
 import { OUTREACH_NOTICE } from './core.mjs';
 import { generateWeatherSentence } from './outreach-text.mjs';
-import { findCities, getWeather, upcomingPrecipitation, weatherSummary, weatherAlert, WEATHER_INTERVAL, isWeatherQuestion, weatherFailureMessage } from './live-data.mjs';
+import { findCities, getWeather, upcomingWeatherMoment, weatherSummary, weatherAlert, WEATHER_INTERVAL, isWeatherQuestion, weatherFailureMessage } from './live-data.mjs';
 
 // Approximate centre of Abadeh, Fars; this is an owner-selected default,
 // not a claim about a recipient's actual location.
@@ -16,22 +16,26 @@ export function nextWeatherWake(record) {
 }
 
 export class WeatherAssistant {
-  constructor(storage, env, send, reschedule) {
+  constructor(storage, env, send, reschedule, afterAlert = async () => {}, canNotify = async () => true) {
     this.storage = storage;
     this.env = env;
     this.send = send;
     this.reschedule = reschedule;
+    this.afterAlert = afterAlert;
+    this.canNotify = canNotify;
   }
-  async previewSnow(chat) {
+  async previewSnow(chat) { return this.previewWeather(chat, 'snow'); }
+  async previewWeather(chat, kind) {
+    if (!['snow', 'rain', 'cloud'].includes(kind)) return;
     const previous = await this.storage.get('snowPreview');
     if (previous?.expiresAt > Date.now()) {
-      await this.send(chat, 'تست برف رو قبلاً فرستادم 🧪 برای جلوگیری از مصرف تکراری اعتبار، هر نفر ساعتی یک بار می‌تونه تست بگیره.');
+      await this.send(chat, 'تست هوا رو قبلاً فرستادم 🧪 برای جلوگیری از مصرف تکراری اعتبار، هر نفر ساعتی یک بار می‌تونه تست بگیره.');
       return;
     }
     // Reserve before generation/delivery. No arbitrary recipient ID is accepted.
     await this.storage.put('snowPreview', { expiresAt: Date.now() + 60 * 60_000 });
     await this.reschedule();
-    const event = { kind: 'snow', severe: false, probability: 85, at: Date.now() + 60 * 60_000 };
+    const event = { kind, current: false, cloudCover: 90, severe: false, probability: 85, at: Date.now() + 60 * 60_000 };
     const sentence = await generateWeatherSentence(this.env, event, await this.storage.get('session'));
     await this.send(chat, weatherAlert(DEFAULT_CITY, event, DEFAULT_CITY.timezone, sentence, true));
   }
@@ -85,7 +89,7 @@ export class WeatherAssistant {
         }
         // Changing cities never silently moves an active alert subscription.
         await this.save({ city, chatId: chat, alertsEnabled: false, nextCheckAt: null });
-        await this.send(chat, `شهرت ثبت شد: ${city.name} 🌍\nهوا: /weather\nهشدار باران و برف: /alerts\nحذف شهر: /forgetcity\nمختصات تقریبی شهر برای پیش‌بینی به Open-Meteo ارسال می‌شه.`);
+        await this.send(chat, `شهرت ثبت شد: ${city.name} 🌍\nهوا: /weather\nخبر باران، برف و هوای ابری: /alerts\nحذف شهر: /forgetcity\nمختصات تقریبی شهر برای پیش‌بینی به Open-Meteo ارسال می‌شه.`);
         return true;
       }
       if (name.length > 100 || name.length < 2) {
@@ -104,7 +108,7 @@ export class WeatherAssistant {
     }
     if (!record.city) record = { ...record, city: { ...DEFAULT_CITY }, defaultCity: true };
     if (command === '/alerts') {
-      await this.send(chat, 'هشدار باران و برف فعال شد 🌦️ هر ساعت بررسی می‌کنم؛ اگر شروع بارش در سه ساعت آینده محتمل باشه خبر می‌دم. پیش‌بینی قطعی نیست و خبر دادن قبل از هر بارش تضمین نمی‌شه. لغو: /weatherstop یا /stop');
+      await this.send(chat, 'خبر باران، برف و هوای ابری فعال شد 🌧️❄️☁️ هر ساعت بررسی می‌کنم؛ شروع بارش در سه ساعت آینده یا آسمون ابریِ پُرابر رو با یه جملهٔ کوتاه خبر می‌دم. برای ابری حداکثر روزی یک پیام داریم. پیش‌بینی قطعی نیست و خبر دادن قبل از هر بارش تضمین نمی‌شه. لغو: /weatherstop یا /stop');
       await this.storage.delete('weatherOptOut');
       await this.save({ ...record, chatId: chat, alertsEnabled: true, nextCheckAt: Date.now() + 1000 });
       return true;
@@ -144,23 +148,32 @@ export class WeatherAssistant {
       await this.storage.put('weather', record);
       return;
     }
+    if (!await this.canNotify(record.chatId)) return;
     let forecast;
     try { forecast = await getWeather(record.city, this.env.fetchImpl || fetch); }
     catch { return; } // no invented warning and no sensitive network logs
-    const event = upcomingPrecipitation(forecast);
-    if (!event || (record.lastAlertAt && Date.now() - record.lastAlertAt < 6 * 60 * 60_000) ||
-        (record.lastEventAt && Math.abs(event.at - record.lastEventAt) < 6 * 60 * 60_000)) return;
-    record.lastAlertAt = Date.now();
-    record.lastEventAt = event.at;
+    const event = upcomingWeatherMoment(forecast);
+    if (!event || (record.lastAlertAt && Date.now() - record.lastAlertAt < 6 * 60 * 60_000)) return;
+    if (event.kind === 'cloud') {
+      if (record.lastCloudAlertAt && Date.now() - record.lastCloudAlertAt < 24 * 60 * 60_000) return;
+      record.lastCloudAlertAt = Date.now();
+    } else {
+      if (record.lastEventAt && Math.abs(event.at - record.lastEventAt) < 6 * 60 * 60_000) return;
+      record.lastAlertAt = Date.now(); record.lastEventAt = event.at;
+    }
     await this.storage.put('weather', record); // claim before sending; no duplicate alarms
     const session = await this.storage.get('session');
     const sentence = await generateWeatherSentence(this.env, event, session);
+    if (!await this.canNotify(record.chatId)) return;
     try { await this.send(record.chatId, weatherAlert(record.city, event, forecast.timezone, sentence)); }
     catch {
       await this.storage.put('weatherOptOut', true);
       record.alertsEnabled = false;
       record.nextCheckAt = null;
       await this.storage.put('weather', record);
+      return;
     }
+    // An optional channel post must never turn a successful weather alert into a failure.
+    try { await this.afterAlert(record.chatId, event); } catch { /* No retry or raw logs. */ }
   }
 }

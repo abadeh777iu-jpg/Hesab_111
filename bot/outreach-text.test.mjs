@@ -62,3 +62,12 @@ test('missing config, upstream errors, empty/verbose/unsafe output gracefully om
     async () => output('شماره شما 123456789 است'), async () => output('<b>پیام</b>'),
   ]) assert.equal(await generateWeatherSentence({ ...base, fetchImpl }, event), null);
 });
+
+test('severe conditions reject an obvious invitation outside, while cloud generation stays at the existing token budget', async () => {
+  const env = { OPENROUTER_API_KEY: 'key', OPENROUTER_MODEL: 'model', fetchImpl: async (_, options) => {
+    const body = JSON.parse(options.body); assert.equal(body.max_tokens, 120);
+    return output(JSON.parse(body.messages[1].content).severe ? 'برو بیرون و زیر بارون قدم بزن و لذت ببر 🌧️' : 'گاهی ابرها بهونهٔ قشنگی برای یه مکث آرومن ☁️');
+  } };
+  assert.equal(await generateWeatherSentence(env, { kind: 'rain', severe: true }), null);
+  assert.ok(await generateWeatherSentence(env, { kind: 'cloud', severe: false }));
+});

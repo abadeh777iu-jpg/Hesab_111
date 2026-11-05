@@ -2,6 +2,8 @@
 export const LIBRARY_CHANNEL = '@qhatel_roya';
 export const CHANNEL_UPDATES = ['message', 'callback_query', 'channel_post', 'edited_channel_post'];
 export const LIBRARY_TTL = 30 * 86400000;
+export const automaticChannelPosts = env => env.CHANNEL_CONFIRMATION_REQUIRED !== 'true';
+export const AUTO_POST_INTERVAL = 24 * 60 * 60_000;
 export const OFFER_TTL = 10 * 60000;
 export const LIBRARY_LIMIT = 200;
 export const isChannelCallback = data => typeof data === 'string' && /^chpick:[a-f0-9]{32}$/.test(data);
@@ -70,6 +72,24 @@ export function selectChannelPost(rows, kind, query, exclude = []) {
   return candidates[0]?.row || null;
 }
 
+// Only literal positive weather interests trigger a conversational extra. Do not
+// infer diagnoses, grief or a person's mood; ambiguous/negative contexts get none.
+export function positiveWeatherContext(text) {
+  const value = normalizeChannelText(text);
+  if (value.startsWith('/') || /نفرست|نمیخوام|نمیخواهم|خودکشی|خودآزاری|بمیرم|بکشم|مرگ|سوگ|فوت|سیل|خسارت|تصادف|خطر|نگران|میترسم|دوست ندارم|دوستش ندارم|خوشم نمیاد|بدم میاد|متنفر|دردسر|کلافه|اذیت|حوصله ندارم|بدون آهنگ|بدون کلیپ|بدون پست/.test(value)) return null;
+  if (!/دوست دارم|دوستش دارم|عاشق|حس خوب|ذوق|کیف|لذت|قشنگ/.test(value)) return null;
+  const kind = hasWord(value, 'باران(?:ی|م)?|بارون(?:ی|م)?') ? 'rain' : hasWord(value, 'برف(?:ی|م)?') ? 'snow' : hasWord(value, 'ابری(?:ه)?|ابر(?:ها|های)?') ? 'cloud' : null;
+  return kind ? { kind, severe: false } : null;
+}
+export function selectChannelMoment(rows, weather, exclude = []) {
+  const topic = { rain: 'باران(?:ی)?|بارون(?:ی)?', snow: 'برف(?:ی)?', cloud: 'ابری|ابر(?:ها|های)?' }[weather];
+  if (!topic) return null;
+  return rows.filter(row => ['song', 'video', 'quote'].includes(row.kind) && !row.unavailable && row.expiresAt > Date.now() && !exclude.includes(row.id))
+    .filter(row => {
+      const text = normalizeChannelText([row.text, row.title, row.performer].join(' '));
+      return hasWord(text, topic) && !/خودکشی|خودآزاری|سیل|خسارت|تصادف|هشدار|طوفان|توفان|بارش شدید|فوت|سوگ/.test(text);
+    }).sort((a, b) => b.date - a.date || b.id - a.id)[0] || null;
+}
 export class ChannelLibraryHandler {
   constructor(ctx) { this.storage = ctx.storage; this.queue = Promise.resolve(); }
   lock(fn) { const task = this.queue.then(fn); this.queue = task.catch(() => {}); return task; }
@@ -103,7 +123,8 @@ export class ChannelLibraryHandler {
     if (!channelId(body.channelId)) return new Response('Invalid', { status: 400 });
     if (path === '/channel-find') {
       const scoped = rows.filter(row => row.channelId === body.channelId);
-      const row = selectChannelPost(scoped, body.kind, clean(body.query, 120), Array.isArray(body.exclude) ? body.exclude.slice(-10) : []);
+      const exclude = Array.isArray(body.exclude) ? body.exclude.slice(-10) : [];
+      const row = body.kind === 'moment' ? selectChannelMoment(scoped, body.weather, exclude) : selectChannelPost(scoped, body.kind, clean(body.query, 120), exclude);
       return Response.json({ value: row });
     }
     if (path === '/channel-get' || path === '/channel-invalidate') {

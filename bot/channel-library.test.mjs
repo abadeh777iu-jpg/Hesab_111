@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { compactChannelPost, channelRequest, ChannelLibraryHandler, LIBRARY_TTL, LIBRARY_LIMIT, selectChannelPost } from './channel-library.mjs';
+import { compactChannelPost, channelRequest, ChannelLibraryHandler, LIBRARY_TTL, LIBRARY_LIMIT, selectChannelPost, positiveWeatherContext, selectChannelMoment } from './channel-library.mjs';
 import { ChatSession, createWorker } from './cloudflare.mjs';
 import { CapacityHandler } from './load-control.mjs';
 
@@ -70,10 +70,10 @@ test('public excerpts expire and an alarm physically clears the bounded catalogu
 
 function fixture(t) {
   let now = Date.now(); t.mock.method(Date, 'now', () => now);
-  const library = memory(), catalogue = new ChannelLibraryHandler(library), capacity = new CapacityHandler(memory());
+  const library = memory(), catalogue = new ChannelLibraryHandler(library), capacityStore = memory(), capacity = new CapacityHandler(capacityStore);
   const sessions = new Map(), stores = new Map(), calls = []; let messageId = 100;
-  const f = { library, catalogue, calls, sessions, stores, member: 'member', protected: false, forwardFails: false, advance: ms => { now += ms; } };
-  const env = { TELEGRAM_BOT_TOKEN: 'fake-token', TELEGRAM_WEBHOOK_SECRET: 'fake-secret', TELEGRAM_ALLOWED_USER_IDS: '*', OPENROUTER_API_KEY: 'fake-key', OPENROUTER_MODEL: 'fake-model', JOIN_REQUIRED: 'false',
+  const f = { library, catalogue, capacity, capacityStore, calls, sessions, stores, member: 'member', protected: false, forwardFails: false, advance: ms => { now += ms; } };
+  const env = { TELEGRAM_BOT_TOKEN: 'fake-token', TELEGRAM_WEBHOOK_SECRET: 'fake-secret', TELEGRAM_ALLOWED_USER_IDS: '*', OPENROUTER_API_KEY: 'fake-key', OPENROUTER_MODEL: 'fake-model', JOIN_REQUIRED: 'false', CHANNEL_CONFIRMATION_REQUIRED: 'true',
     fetchImpl: async (url, options) => {
       const body = JSON.parse(options.body); calls.push({ url, body });
       if (url.includes('openrouter.ai')) return Response.json({ choices: [{ message: { content: 'می‌شنوم، بیشتر بگو 🌱' } }] });
@@ -195,4 +195,127 @@ test('pending private channel offers are capped at three and their expiry keeps 
   assert.ok(store.alarm <= firstExpiry);
   f.advance(11 * 60000); await f.sessions.get('42').alarm();
   assert.equal(store.state.get('session').channelOffers.length, 0);
+});
+
+test('default direct requests send original channel content without a confirmation step or extra model calls', async t => {
+  const f = fixture(t); delete f.env.CHANNEL_CONFIRMATION_REQUIRED; await f.dispatch(post());
+  await f.ask(); assert.equal(f.calls.filter(c => c.url.endsWith('/forwardMessage')).length, 1);
+  assert.equal(f.stores.get('42').state.get('session').channelOffers, undefined);
+  assert.ok(!f.calls.some(c => c.body.reply_markup?.inline_keyboard?.[0]?.[0]?.callback_data?.startsWith('chpick:')));
+  await f.ask(); assert.equal(f.calls.filter(c => c.url.endsWith('/forwardMessage')).length, 1);
+  assert.equal(f.calls.filter(c => c.url.includes('openrouter.ai')).length, 0);
+});
+
+test('automatic requests remain fail-closed when a user leaves or the channel becomes protected', async t => {
+  const f = fixture(t); delete f.env.CHANNEL_CONFIRMATION_REQUIRED; delete f.env.JOIN_REQUIRED; await f.dispatch(post());
+  f.member = 'left'; await f.ask(); assert.equal(f.calls.filter(c => c.url.endsWith('/forwardMessage')).length, 0);
+  f.member = 'member'; f.protected = true; f.advance(5000); await f.ask(1001);
+  assert.equal(f.calls.filter(c => c.url.endsWith('/forwardMessage')).length, 0);
+});
+
+test('positive contextual weather matching is literal, topic-specific, conservative and never a sensitive mood inference', () => {
+  assert.equal(positiveWeatherContext('عاشق بارونم').kind, 'rain');
+  assert.equal(positiveWeatherContext('بارون رو دوست دارم').kind, 'rain');
+  assert.equal(positiveWeatherContext('هوای ابری حس خوبی داره').kind, 'cloud');
+  assert.equal(positiveWeatherContext('برف قشنگه').kind, 'snow');
+  for (const text of ['دلم گرفته', 'از بارون میترسم', 'برف قشنگه ولی خسارت زد', 'عاشق بارون بودم ولی الان متنفرم', '/weather', 'بارون قشنگه ولی آهنگ نفرست', 'عاشق برفم میخوام بمیرم']) assert.equal(positiveWeatherContext(text), null, text);
+  const rows = [ { id: 1, kind: 'song', date: 1, text: '#باران', expiresAt: Date.now() + 10000 }, { id: 2, kind: 'video', date: 2, text: '#برف', expiresAt: Date.now() + 10000 }, { id: 3, kind: 'quote', date: 3, text: '#باران خسارت سیل', expiresAt: Date.now() + 10000 } ];
+  assert.equal(selectChannelMoment(rows, 'rain').id, 1); assert.equal(selectChannelMoment(rows, 'cloud'), null);
+  assert.equal(selectChannelMoment(rows, 'rain', [1]), null);
+});
+
+test('contextual posts follow the normal reply, need no second confirmation, and have a durable daily limit', async t => {
+  const f = fixture(t); delete f.env.CHANNEL_CONFIRMATION_REQUIRED;
+  await f.dispatch(post(1, { caption: '#بارون #آرام' }));
+  await f.ask(1000, '/channelauto');
+  await f.ask(1001, 'بارون رو دوست دارم');
+  assert.equal(f.calls.filter(c => c.url.endsWith('/forwardMessage')).length, 1);
+  const first = f.calls.findIndex(c => c.url.endsWith('/forwardMessage'));
+  assert.ok(f.calls.slice(0, first).some(c => c.url.endsWith('/sendMessage') && c.body.text.includes('بیشتر بگو')));
+  f.advance(10000); await f.ask(1002, 'بارون رو دوست دارم');
+  assert.equal(f.calls.filter(c => c.url.endsWith('/forwardMessage')).length, 1);
+  const store = f.stores.get('42'); assert.ok(store.state.get('channelAuto').expiresAt > Date.now());
+  assert.ok(!JSON.stringify(store.state.get('channelAuto')).includes('دوست دارم'));
+  f.advance(25 * 3600000); await f.sessions.get('42').alarm();
+  assert.equal(store.state.has('channelAuto'), false);
+});
+
+test('channelstop/reset/global stop preserve opt-outs across restart and do not block a direct channel request', async t => {
+  const f = fixture(t); delete f.env.CHANNEL_CONFIRMATION_REQUIRED; await f.dispatch(post(1, { caption: '#بارون' }));
+  await f.ask(1000, '/channelauto'); await f.ask(1001, '/channelstop'); f.advance(5000); await f.ask(1002, 'بارون رو دوست دارم');
+  assert.equal(f.calls.filter(c => c.url.endsWith('/forwardMessage')).length, 0);
+  await f.ask(1003, '/start'); assert.equal(f.stores.get('42').state.get('channelOptOut'), true);
+  f.advance(5000); await f.ask(1004, '/song'); assert.equal(f.calls.filter(c => c.url.endsWith('/forwardMessage')).length, 1);
+  await f.ask(1005, '/channelauto'); await f.ask(1006, '/reset'); assert.equal(f.stores.get('42').state.get('channelOptOut'), true);
+  await f.ask(1007, '/channelauto'); await f.ask(1008, '/stop'); assert.equal(f.stores.get('42').state.get('channelOptOut'), true);
+});
+
+test('legacy opt-outs and hazardous/irrelevant contexts never trigger automatic attachments', async t => {
+  const f = fixture(t); delete f.env.CHANNEL_CONFIRMATION_REQUIRED; await f.dispatch(post(1, { caption: '#بارون' }));
+  await f.ask(1000, 'بارون رو دوست دارم'); // Fixture has pre-existing /stop preferences.
+  assert.equal(f.calls.filter(c => c.url.endsWith('/forwardMessage')).length, 0);
+  await f.ask(1001, '/channelauto'); f.advance(5000); await f.ask(1002, 'برف رو دوست دارم');
+  assert.equal(f.calls.filter(c => c.url.endsWith('/forwardMessage')).length, 0); // No matching snow post.
+  await f.sessions.get('42').maybeSendChannelMoment(42, { kind: 'rain', severe: true });
+  assert.equal(f.calls.filter(c => c.url.endsWith('/forwardMessage')).length, 0);
+});
+
+test('a busy media lease quietly omits the optional post without charging a model or leaking capacity', async t => {
+  const f = fixture(t); delete f.env.CHANNEL_CONFIRMATION_REQUIRED; await f.dispatch(post(1, { caption: '#بارون' })); await f.ask(1000, '/channelauto');
+  await rpc(f.capacity, 'ignored', { op: 'admit', id: 'u99000' });
+  await rpc(f.capacity, 'ignored', { op: 'start', id: 'u99000', kind: 'media' });
+  await f.sessions.get('42').maybeSendChannelMoment(42, { kind: 'rain', severe: false });
+  assert.equal(f.calls.filter(c => c.url.endsWith('/forwardMessage')).length, 0);
+  assert.equal(f.calls.filter(c => c.url.includes('openrouter.ai')).length, 0);
+  assert.equal(f.capacityStore.state.get('workTickets').length, 1);
+});
+
+test('weather composition sends factual clouds plus a sentence, then an optional matching native post only once', async t => {
+  const f = fixture(t); delete f.env.CHANNEL_CONFIRMATION_REQUIRED; delete f.env.JOIN_REQUIRED;
+  await f.dispatch(post(1, { caption: '#ابری #آرام' })); await f.ask(1000, '/channelauto');
+  const store = f.stores.get('42'); store.state.delete('weatherOptOut');
+  const original = f.env.fetchImpl;
+  f.env.fetchImpl = async (url, options) => {
+    if (new URL(url).hostname === 'api.open-meteo.com') {
+      const hour = Math.floor(Date.now() / 3600000) * 3600;
+      return Response.json({ timezone: 'Asia/Tehran', current: { time: Math.floor(Date.now() / 1000), temperature_2m: 13, weather_code: 3, cloud_cover: 95 }, hourly: { time: [hour, hour + 3600, hour + 7200], weather_code: [3, 3, 3], cloud_cover: [95, 95, 95], precipitation_probability: [0, 0, 0], rain: [0, 0, 0], snowfall: [0, 0, 0] } });
+    }
+    return original(url, options);
+  };
+  store.state.set('weather', { city: { name: 'آباده', latitude: 31.16, longitude: 52.65 }, chatId: 42, alertsEnabled: true, nextCheckAt: Date.now() - 1 });
+  await f.sessions.get('42').alarm();
+  assert.ok(f.calls.some(c => c.url.endsWith('/sendMessage') && c.body.text.includes('آسمون ابریه') && c.body.text.includes('Open-Meteo')));
+  assert.equal(f.calls.filter(c => c.url.endsWith('/forwardMessage')).length, 1);
+  assert.equal(f.calls.filter(c => c.url.includes('openrouter.ai')).length, 1);
+  assert.equal(f.capacityStore.state.get('workTickets').length, 0);
+  await f.sessions.get('42').alarm(); assert.equal(f.calls.filter(c => c.url.endsWith('/forwardMessage')).length, 1);
+});
+
+test('late weather errors preserve an already stored event claim rather than retrying paid generation', async t => {
+  const f = fixture(t); await f.ask(1000, '/channel'); const store = f.stores.get('42'), session = f.sessions.get('42');
+  const original = { alertsEnabled: true, nextCheckAt: Date.now() - 1, chatId: 42 };
+  store.state.set('weather', original);
+  session.weather.alarm = async () => { store.state.set('weather', { ...original, lastAlertAt: Date.now(), lastEventAt: Date.now() + 3600000 }); throw new Error('late transient failure'); };
+  await session.runWeatherAlarm(original);
+  assert.ok(store.state.get('weather').lastAlertAt); assert.ok(store.state.get('weather').nextCheckAt > Date.now());
+});
+
+test('leaving during an ordinary chat reply blocks the contextual file despite initial membership', async t => {
+  const f = fixture(t); delete f.env.CHANNEL_CONFIRMATION_REQUIRED; delete f.env.JOIN_REQUIRED;
+  await f.dispatch(post(1, { caption: '#بارون' })); await f.ask(1000, '/channelauto');
+  const original = f.env.fetchImpl;
+  f.env.fetchImpl = async (url, options) => { const response = await original(url, options); if (url.includes('openrouter.ai')) f.member = 'left'; return response; };
+  await f.ask(1001, 'بارون رو دوست دارم');
+  assert.equal(f.calls.filter(c => c.url.endsWith('/forwardMessage')).length, 0);
+  assert.equal(f.stores.get('42').state.has('channelAuto'), false);
+});
+
+test('an optional contextual-storage failure cannot turn an already delivered chat answer into a failure message', async t => {
+  const f = fixture(t); delete f.env.CHANNEL_CONFIRMATION_REQUIRED;
+  await f.dispatch(post(1, { caption: '#بارون' })); await f.ask(1000, '/channelauto');
+  const store = f.stores.get('42'), get = store.storage.get;
+  store.storage.get = async key => { if (key === 'channelOptOut') throw new Error('transient private-storage failure'); return get(key); };
+  await f.ask(1001, 'بارون رو دوست دارم');
+  assert.equal(f.calls.filter(c => c.url.endsWith('/forwardMessage')).length, 0);
+  assert.ok(f.calls.filter(c => c.url.endsWith('/sendMessage')).at(-1).body.text.includes('بیشتر بگو'));
 });

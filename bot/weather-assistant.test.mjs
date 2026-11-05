@@ -272,3 +272,58 @@ test('snow preview generates a fresh sentence once per hour and expires only its
   assert.equal(generations, 2);
   assert.ok(sent.at(-1).text.startsWith('🧪 آزمایشی'));
 });
+
+function cloudyFeed(env) {
+  env.fetchImpl = async () => {
+    const hour = Math.floor(Date.now() / 3600000) * 3600;
+    return Response.json({ timezone: 'Asia/Tehran', current: { time: Math.floor(Date.now() / 1000), temperature_2m: 14, weather_code: 3, cloud_cover: 95 }, hourly: {
+      time: [hour, hour + 3600, hour + 7200], weather_code: [3, 3, 3], cloud_cover: [95, 95, 95], rain: [0, 0, 0], snowfall: [0, 0, 0], precipitation_probability: [0, 0, 0],
+    } });
+  };
+}
+
+test('cloud notifications have a daily dedupe claim and a pretty fallback even without model access', async t => {
+  let now = Date.UTC(2026, 10, 5, 12, 15); t.mock.method(Date, 'now', () => now);
+  const f = setup(); cloudyFeed(f.env); let extras = 0;
+  f.assistant.afterAlert = async (_, event) => { assert.equal(event.kind, 'cloud'); extras++; };
+  await f.assistant.ensureAutomatic(42, true); now += 1000; await f.assistant.alarm();
+  assert.equal(f.sent.length, 1); assert.ok(f.sent[0].text.includes('آسمون ابریه')); assert.ok(f.sent[0].text.includes('هدیه بده'));
+  for (let i = 0; i < 23; i++) { now += WEATHER_INTERVAL; await f.assistant.alarm(); }
+  assert.equal(f.sent.length, 1); assert.equal(extras, 1);
+  now += WEATHER_INTERVAL; await f.assistant.alarm(); assert.equal(f.sent.length, 2);
+});
+
+test('a cloud message cannot suppress a newly forecast rain event, and optional media failure never disables weather', async t => {
+  let now = Date.UTC(2026, 10, 5, 12, 15); t.mock.method(Date, 'now', () => now);
+  const f = setup(), rainy = f.env.fetchImpl; cloudyFeed(f.env);
+  f.assistant.afterAlert = async () => { throw new Error('unavailable channel'); };
+  await f.assistant.ensureAutomatic(42, true); now += 1000; await f.assistant.alarm();
+  f.env.fetchImpl = rainy; now += WEATHER_INTERVAL; await f.assistant.alarm();
+  assert.equal(f.sent.length, 2); assert.ok(f.sent[1].text.includes('احتمال باران'));
+  assert.equal(f.state.get('weather').alertsEnabled, true);
+});
+
+test('membership changes during sentence generation cannot deliver a weather notification or channel extra', async t => {
+  let now = Date.UTC(2026, 10, 5, 12, 15); t.mock.method(Date, 'now', () => now);
+  const f = setup(); let membership = true, extras = 0;
+  const fetchWeather = f.env.fetchImpl; f.env.OPENROUTER_API_KEY = 'fake'; f.env.OPENROUTER_MODEL = 'fake';
+  f.env.fetchImpl = async (url, options) => {
+    if (url.includes('openrouter.ai')) { membership = false; return Response.json({ choices: [{ message: { content: 'یه لحظه مکث کنار پنجره شاید قشنگ باشه 🌱' } }] }); }
+    return fetchWeather(url, options);
+  };
+  f.assistant.canNotify = async () => membership; f.assistant.afterAlert = async () => { extras++; };
+  await f.assistant.ensureAutomatic(42, true); now += 1000; await f.assistant.alarm();
+  assert.equal(f.sent.length, 0); assert.equal(extras, 0);
+});
+
+test('rain/cloud simulations share the existing once-hourly snow test budget and never send optional channel media', async t => {
+  let now = Date.UTC(2026, 10, 5, 12, 15); t.mock.method(Date, 'now', () => now);
+  const f = setup(); let extras = 0; f.assistant.afterAlert = async () => { extras++; };
+  await f.assistant.previewWeather(42, 'rain');
+  assert.ok(f.sent[0].text.startsWith('🧪 آزمایشی')); assert.ok(f.sent[0].text.includes('خبر واقعی باران نیست'));
+  await f.assistant.previewWeather(42, 'cloud'); assert.ok(f.sent[1].text.includes('ساعتی یک بار'));
+  now += 3600000; await f.assistant.previewWeather(42, 'cloud');
+  assert.ok(f.sent[2].text.startsWith('🧪 آزمایشی')); assert.ok(f.sent[2].text.includes('خبر واقعی هوای ابری نیست'));
+  assert.ok(!f.sent[2].text.includes('منبع: Open-Meteo')); assert.equal(f.calls.length, 0); assert.equal(extras, 0);
+  assert.equal(f.state.has('weather'), false);
+});

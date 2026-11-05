@@ -25,7 +25,7 @@ test('workerd indexes a new source-channel post and forwards it only after a mem
   const mf = new Miniflare(convertV4MiniflareOptions({ workers: [{
     name: 'channel-runtime', modules: true, compatibilityDate: '2026-10-01', script: bundle.outputFiles[0].text,
     durableObjects: { CHATS: 'ChatSession', MARKETS: 'MarketFeed' }, serviceBindings: { UPSTREAM: 'fake-channel-telegram' },
-    bindings: { TELEGRAM_BOT_TOKEN: 'fake-token', TELEGRAM_WEBHOOK_SECRET: 'fake-secret', TELEGRAM_ALLOWED_USER_IDS: '42', OPENROUTER_API_KEY: 'unused-key', OPENROUTER_MODEL: 'unused-model' },
+    bindings: { CHANNEL_CONFIRMATION_REQUIRED: 'true', TELEGRAM_BOT_TOKEN: 'fake-token', TELEGRAM_WEBHOOK_SECRET: 'fake-secret', TELEGRAM_ALLOWED_USER_IDS: '42', OPENROUTER_API_KEY: 'unused-key', OPENROUTER_MODEL: 'unused-model' },
   }, {
     name: 'fake-channel-telegram', modules: true, compatibilityDate: '2026-10-01', script: `
       let nextId = 100, memberships = 0; const sent = [], forwards = [], methods = [];

@@ -169,3 +169,41 @@ test('safe weather diagnostics distinguish HTTP, network, timeout, invalid data 
   assert.ok(weatherFailureMessage(new Error('token=secret')).includes('WX_INTERNAL'));
   assert.ok(!weatherFailureMessage(new LiveDataError('secret')).includes('secret'));
 });
+
+test('cloud moments require fresh actual cloud cover or two consecutive forecast hours, not rain probability', async t => {
+  const { upcomingWeatherMoment } = await import('./live-data.mjs');
+  const now = Date.UTC(2026, 10, 5, 12, 15); t.mock.method(Date, 'now', () => now);
+  const data = forecast(); data.hourly.rain.fill(0); data.hourly.precipitation_probability.fill(0); data.hourly.weather_code.fill(3);
+  data.current.cloud_cover = 95;
+  let event = upcomingWeatherMoment(data); assert.equal(event.kind, 'cloud'); assert.equal(event.current, true); assert.equal(event.probability, undefined);
+  const text = weatherAlert({ name: 'آباده' }, event, 'Asia/Tehran');
+  assert.ok(text.includes('آسمون ابریه')); assert.ok(text.includes('☁️')); assert.ok(!text.includes('٪'));
+  data.current.cloud_cover = 30; data.hourly.cloud_cover = [30, 90, 92, 20, 0];
+  event = upcomingWeatherMoment(data); assert.equal(event.current, false); assert.equal(event.kind, 'cloud');
+  assert.ok(weatherAlert({ name: 'آباده' }, event, 'UTC').includes('زمان پیش‌بینی'));
+  data.hourly.cloud_cover[2] = 40; assert.equal(upcomingWeatherMoment(data), null);
+  data.hourly.cloud_cover = [20, 90, 90, 90, 90]; data.hourly.time[2] += 300;
+  data.hourly.cloud_cover[3] = 0; assert.equal(upcomingWeatherMoment(data), null);
+  delete data.hourly.cloud_cover; delete data.current.cloud_cover; assert.equal(upcomingWeatherMoment(data), null);
+});
+
+test('precipitation takes precedence and hazardous weather is never repackaged as a pleasant cloud moment', async t => {
+  const { upcomingWeatherMoment } = await import('./live-data.mjs');
+  t.mock.method(Date, 'now', () => Date.UTC(2026, 10, 5, 12, 15));
+  const data = forecast(); data.current.cloud_cover = 95;
+  assert.equal(upcomingWeatherMoment(data).kind, 'rain');
+  data.hourly.rain.fill(0); data.hourly.snowfall.fill(0); data.hourly.precipitation_probability.fill(0);
+  data.hourly.weather_code.fill(3); data.current.weather_code = 95;
+  assert.equal(upcomingWeatherMoment(data), null);
+  data.current.weather_code = 3; data.hourly.weather_code[1] = 99; assert.equal(upcomingWeatherMoment(data), null);
+  data.hourly.weather_code.fill(3); data.current.time -= 7200; assert.equal(upcomingWeatherMoment(data), null);
+});
+
+test('current fog suppresses pleasant media without inventing a heavy-rain forecast', async t => {
+  const { upcomingWeatherMoment } = await import('./live-data.mjs');
+  t.mock.method(Date, 'now', () => Date.UTC(2026, 10, 5, 12, 15));
+  const data = forecast(); data.current.weather_code = 45;
+  const event = upcomingWeatherMoment(data); assert.equal(event.kind, 'rain'); assert.equal(event.severe, false); assert.equal(event.unsafe, true);
+  const text = weatherAlert({ name: 'آباده' }, event, 'UTC');
+  assert.ok(text.includes('احتیاط')); assert.ok(!text.includes('بارش شدید'));
+});

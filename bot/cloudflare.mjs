@@ -1,4 +1,4 @@
-import { compactChannelPost, channelRequest, channelKindLabel, isChannelCallback, nextChannelOffer, OFFER_TTL, LIBRARY_CHANNEL } from './channel-library.mjs';
+import { automaticChannelPosts, positiveWeatherContext, AUTO_POST_INTERVAL, compactChannelPost, channelRequest, channelKindLabel, isChannelCallback, nextChannelOffer, OFFER_TTL, LIBRARY_CHANNEL } from './channel-library.mjs';
 import { DurableInbox, asyncUpdates, compactUpdate, nextInboxWake, priorityUpdate, BUSY_TEXT, EXPIRED_TEXT } from './load-control.mjs';
 import { instagramRequest, isMusicCallback, InstagramError, instagramFailure, IG_PERSONAL_LIMIT, IG_JOB_TTL, nextInstagramJob, igDayEnd, downloadInstagramVideo, uploadInstagramVideo, musicReply } from './instagram.mjs';
 import { MembershipGate, membershipRequired, JOIN_CALLBACK, JOIN_KEYBOARD, JOIN_TEXT, JOIN_UNAVAILABLE, enableMembershipCallbacks } from './membership.mjs';
@@ -16,7 +16,7 @@ const TTL = 30 * 60_000;
 export const FOLLOWUP_NOTICE = OUTREACH_NOTICE;
 export const FOLLOWUP_DELAY = 24 * 60 * 60_000;
 export const FOLLOWUP_TEXT = 'سلام رفیق، امروز چطوری؟ 🙂🌱\n\nلغو احوال‌پرسی: /stop';
-export const CLOUD_PRIVACY = 'پیام‌ها برای پاسخ به OpenRouter و ارائه‌دهندهٔ مدل ارسال می‌شن. درخواست‌های منتظر با اعتبار حداکثر ۱۰ دقیقه در صف کلودفلر ذخیره و در پردازش یا پاک‌سازی بعدی حذف می‌شن؛ شناسهٔ دریافت برای جلوگیری از تکرار تا ۳۰ دقیقه می‌مونه. /reset متن‌های منتظر قبلی رو هم پاک می‌کنه؛ کاری که شروع شده ممکنه قبلاً به سرویس مقصد فرستاده شده باشه. حداکثر ۳۰ پیام اخیر در کلودفلر نگه داشته و بعد از ۳۰ دقیقه بی‌فعالیتی یا /reset از حافظهٔ فعال حذف می‌شن. احوال‌پرسی پس از اطلاع کوتاه در گفتگو خودکار فعاله؛ حدود ۲۴ ساعت بعد از آخرین پیام، یک پیام عمومی می‌فرستیم، نه پیام تکراری روزانه. لغو: /stop — فعال‌سازی دوباره: /followup. شناسهٔ چت و زمان ارسال جدا از متن گفتگو ذخیره می‌شن؛ با لغو، این دو حذف و فقط ترجیح خاموشی نگه داشته می‌شه تا با پیام جدید یا /start دوباره فعال نشه. /reset هم پیگیری رو خاموش می‌کنه. پیام‌های تلگرام، داده‌های سرویس مدل و نسخه‌های پشتیبان تابع سیاست همون سرویس‌ها هستن. شهر پیش‌فرض آباده، فارس است، نه لزوماً محل زندگی تو. پیام‌های خودکار بعد از اطلاع کلیِ پیام‌دادن فعال می‌شن. جملهٔ همراه خبر هوا با OpenRouter تولید می‌شه؛ اگر گفتگوی تازه‌ای باشه، فقط یک نشانهٔ کلی برای ملایم‌ترشدن لحن به‌صورت محلی گرفته می‌شه؛ متن خصوصی گفتگو در درخواست نوشتن جمله فرستاده نمی‌شه. شهر دلخواه و مختصات تقریبی آن جداگانه برای هوا نگه داشته و به Open-Meteo ارسال می‌شه؛ حذف شهر و هشدارها: /forgetcity یا /reset. ترجیح خاموشی هوا هم جدا نگه داشته می‌شه تا با پیام جدید دوباره فعال نشه. /stop همهٔ پیام‌های خودکار رو خاموش می‌کنه. زمان درخواست تست برف فقط برای محدودکردن مصرف تا یک ساعت نگه داشته می‌شه. چت و نوشتن پاسخ روی OpenRouter می‌مونه. برای عکس، توضیح درخواستی به Free.ai و مدل تصویر فرستاده می‌شه؛ برای ویس، فقط متن پاسخ به سرویس صدای OpenRouter و ارائه‌دهندهٔ مدل گفتار فرستاده می‌شه؛ اگر مدیر آگاهانه سرویس رسانه رو عوض کنه، مقصد همان سرویس انتخابی می‌شه. فایل خروجی Free.ai ممکنه تا مدتی روی آدرس عمومی سرویس در دسترس باشه و سیاست نگهداری خودش اعمال می‌شه؛ فایل ساخته‌شده به تلگرام ارسال می‌شه ولی این برنامه فایل رو ذخیره یا لاگ نمی‌کنه. ویس صدای مصنوعیه، نه صدای واقعی امیر. بودجهٔ مصرف عکس و ویس بدون متن یا فایل تا پایان روز UTC نگه داشته می‌شه؛ /reset این محدودیت مصرف رو پاک نمی‌کنه. اخبار ایران فقط با سؤال تو از خوراک عمومی ایسنا، بی‌بی‌سی فارسی، صداوسیما و فاکس‌نیوز و صفحهٔ عمومی کانال فارس دریافت می‌شه؛ متن خصوصی یا کلیدت به رسانه‌ها نمی‌ره. فقط تیتر و خلاصهٔ خبرها برای بازنویسی به OpenRouter می‌ره و از اعتبار مدیر استفاده می‌کنه؛ این خلاصه، تأیید مستقل گزارش رسانه نیست. دریافت خبرها تا یک دقیقه مشترک cache می‌شه؛ در قطع منبع، آخرین داده با برچسب ذخیره‌شده و فقط تا ۲۴ ساعت از انتشار قابل نمایشه. پیام خبری خودکار نداریم. تاریخ و روز هفته به وقت ایران از ساعت برنامه محاسبه می‌شه؛ مناسبت‌های ثابت محلی‌اند و تعطیلات از تقویم عمومی ایران گوگل، بدون شناسه یا پیام خصوصی، دریافت و مشترک ذخیره می‌شن. پاسخ تقویم از OpenRouter اعتبار مصرف نمی‌کنه و اعلان روزانهٔ تازه‌ای فعال نمی‌کنه. برای چت، عضویت در کانال @qhatel_roya با شناسهٔ تلگرام و از طریق خود تلگرام بررسی می‌شه؛ متن پیام برای کانال فرستاده نمی‌شه و نتیجهٔ عضویت دائماً ذخیره نمی‌شه. خروج از کانال، دسترسی چت و پیام‌های خودکار رو تا عضویت مجدد محدود می‌کنه. /stop و /reset و فرمان‌های حریم خصوصی بدون عضویت هم در دسترس‌اند. لینک پست یا ریلز عمومی برای دریافت به vxInstagram و فقط با زدن دکمهٔ موسیقی به SongFinder فرستاده می‌شه؛ نه متن گفتگو یا کلیدها. فایل ویدئو موقتاً برای ارسال دریافت می‌شه و این برنامه آن را ذخیره نمی‌کنه. شناسهٔ فایل عمومیِ آپلودشده در تلگرام تا ۵ دقیقه برای ارسال دوباره قابل استفاده است؛ نگهداری فایل در تلگرام تابع سیاست آن سرویس است. لینک عمومی و شناسهٔ پیامِ حداکثر سه دکمه تا ۳۰ دقیقه در حافظهٔ گفتگو و شمارندهٔ تلاش‌ها جدا تا پایان روز UTC می‌مونه؛ /reset لینک‌ها رو پاک می‌کنه نه سهمیه‌ها. منابع رایگان ممکنه محدود یا قطع بشن و ارسال فایل کامل آهنگ تضمین نیست. پست‌های عمومی جدید کانال با توضیح کوتاه تا ۳۰ روز ثبت می‌شن؛ نه فایل یا متن خصوصی. انتخاب از کپشنه، نه شنیدن یا دیدن فایل؛ پیشنهادهای شخصی تا پایان جلسه یا /reset می‌مونن. ارسال پست با زدن دکمه و با نام کاناله. لطفاً اطلاعات حساس نفرست.';
+export const CLOUD_PRIVACY = 'پیام‌ها برای پاسخ به OpenRouter و ارائه‌دهندهٔ مدل ارسال می‌شن. درخواست‌های منتظر با اعتبار حداکثر ۱۰ دقیقه در صف کلودفلر ذخیره و در پردازش یا پاک‌سازی بعدی حذف می‌شن؛ شناسهٔ دریافت برای جلوگیری از تکرار تا ۳۰ دقیقه می‌مونه. /reset متن‌های منتظر قبلی رو هم پاک می‌کنه؛ کاری که شروع شده ممکنه قبلاً به سرویس مقصد فرستاده شده باشه. حداکثر ۳۰ پیام اخیر در کلودفلر نگه داشته و بعد از ۳۰ دقیقه بی‌فعالیتی یا /reset از حافظهٔ فعال حذف می‌شن. احوال‌پرسی پس از اطلاع کوتاه در گفتگو خودکار فعاله؛ حدود ۲۴ ساعت بعد از آخرین پیام، یک پیام عمومی می‌فرستیم، نه پیام تکراری روزانه. لغو: /stop — فعال‌سازی دوباره: /followup. شناسهٔ چت و زمان ارسال جدا از متن گفتگو ذخیره می‌شن؛ با لغو، این دو حذف و فقط ترجیح خاموشی نگه داشته می‌شه تا با پیام جدید یا /start دوباره فعال نشه. /reset هم پیگیری رو خاموش می‌کنه. پیام‌های تلگرام، داده‌های سرویس مدل و نسخه‌های پشتیبان تابع سیاست همون سرویس‌ها هستن. شهر پیش‌فرض آباده، فارس است، نه لزوماً محل زندگی تو. پیام‌های خودکار بعد از اطلاع کلیِ پیام‌دادن فعال می‌شن. جملهٔ همراه خبر هوا با OpenRouter تولید می‌شه؛ اگر گفتگوی تازه‌ای باشه، فقط یک نشانهٔ کلی برای ملایم‌ترشدن لحن به‌صورت محلی گرفته می‌شه؛ متن خصوصی گفتگو در درخواست نوشتن جمله فرستاده نمی‌شه. شهر دلخواه و مختصات تقریبی آن جداگانه برای هوا نگه داشته و به Open-Meteo ارسال می‌شه؛ حذف شهر و هشدارها: /forgetcity یا /reset. ترجیح خاموشی هوا هم جدا نگه داشته می‌شه تا با پیام جدید دوباره فعال نشه. /stop همهٔ پیام‌های خودکار رو خاموش می‌کنه. زمان درخواست تست هوا فقط برای محدودکردن مصرف تا یک ساعت نگه داشته می‌شه. چت و نوشتن پاسخ روی OpenRouter می‌مونه. برای عکس، توضیح درخواستی به Free.ai و مدل تصویر فرستاده می‌شه؛ برای ویس، فقط متن پاسخ به سرویس صدای OpenRouter و ارائه‌دهندهٔ مدل گفتار فرستاده می‌شه؛ اگر مدیر آگاهانه سرویس رسانه رو عوض کنه، مقصد همان سرویس انتخابی می‌شه. فایل خروجی Free.ai ممکنه تا مدتی روی آدرس عمومی سرویس در دسترس باشه و سیاست نگهداری خودش اعمال می‌شه؛ فایل ساخته‌شده به تلگرام ارسال می‌شه ولی این برنامه فایل رو ذخیره یا لاگ نمی‌کنه. ویس صدای مصنوعیه، نه صدای واقعی امیر. بودجهٔ مصرف عکس و ویس بدون متن یا فایل تا پایان روز UTC نگه داشته می‌شه؛ /reset این محدودیت مصرف رو پاک نمی‌کنه. اخبار ایران فقط با سؤال تو از خوراک عمومی ایسنا، بی‌بی‌سی فارسی، صداوسیما و فاکس‌نیوز و صفحهٔ عمومی کانال فارس دریافت می‌شه؛ متن خصوصی یا کلیدت به رسانه‌ها نمی‌ره. فقط تیتر و خلاصهٔ خبرها برای بازنویسی به OpenRouter می‌ره و از اعتبار مدیر استفاده می‌کنه؛ این خلاصه، تأیید مستقل گزارش رسانه نیست. دریافت خبرها تا یک دقیقه مشترک cache می‌شه؛ در قطع منبع، آخرین داده با برچسب ذخیره‌شده و فقط تا ۲۴ ساعت از انتشار قابل نمایشه. پیام خبری خودکار نداریم. تاریخ و روز هفته به وقت ایران از ساعت برنامه محاسبه می‌شه؛ مناسبت‌های ثابت محلی‌اند و تعطیلات از تقویم عمومی ایران گوگل، بدون شناسه یا پیام خصوصی، دریافت و مشترک ذخیره می‌شن. پاسخ تقویم از OpenRouter اعتبار مصرف نمی‌کنه و اعلان روزانهٔ تازه‌ای فعال نمی‌کنه. برای چت، عضویت در کانال @qhatel_roya با شناسهٔ تلگرام و از طریق خود تلگرام بررسی می‌شه؛ متن پیام برای کانال فرستاده نمی‌شه و نتیجهٔ عضویت دائماً ذخیره نمی‌شه. خروج از کانال، دسترسی چت و پیام‌های خودکار رو تا عضویت مجدد محدود می‌کنه. /stop و /reset و فرمان‌های حریم خصوصی بدون عضویت هم در دسترس‌اند. لینک پست یا ریلز عمومی برای دریافت به vxInstagram و فقط با زدن دکمهٔ موسیقی به SongFinder فرستاده می‌شه؛ نه متن گفتگو یا کلیدها. فایل ویدئو موقتاً برای ارسال دریافت می‌شه و این برنامه آن را ذخیره نمی‌کنه. شناسهٔ فایل عمومیِ آپلودشده در تلگرام تا ۵ دقیقه برای ارسال دوباره قابل استفاده است؛ نگهداری فایل در تلگرام تابع سیاست آن سرویس است. لینک عمومی و شناسهٔ پیامِ حداکثر سه دکمه تا ۳۰ دقیقه در حافظهٔ گفتگو و شمارندهٔ تلاش‌ها جدا تا پایان روز UTC می‌مونه؛ /reset لینک‌ها رو پاک می‌کنه نه سهمیه‌ها. منابع رایگان ممکنه محدود یا قطع بشن و ارسال فایل کامل آهنگ تضمین نیست. پست‌های عمومی جدید کانال با توضیح کوتاه تا ۳۰ روز ثبت می‌شن؛ نه فایل یا متن خصوصی. انتخاب از کپشنه، نه شنیدن یا دیدن فایل؛ پیشنهادهای شخصی تا پایان جلسه یا /reset می‌مونن. پستِ مرتبط می‌تونه بدون دکمه با نام کانال فرستاده بشه؛ ارسال زمینه‌ای خودکار حداکثر روزی یک پسته و لغوش /channelstop یا /stop است. فقط زمان و شناسهٔ پستِ این ارسال تا ۲۴ ساعت برای جلوگیری از تکرار نگه داشته می‌شه. لطفاً اطلاعات حساس نفرست.';
 const ABOUT = `${PERSONA_GREETING}\n\n${CREATOR_REPLY}\n\n${CLOUD_PRIVACY}\n\nلغو احوال‌پرسی: /stop — فعال‌سازی دوباره: /followup\n\nاین روزها مشغول چه کاری هستی و کجاش گیر کردی؟`;
 const FAILURE = 'الان نتونستم پاسخ رو آماده یا ارسال کنم. لطفاً کمی بعد دوباره پیام بده. اگر در خطر فوری هستی، منتظر ربات نمون و با خدمات اضطراری محل یا یک فرد مطمئن تماس بگیر.';
 const ok = () => new Response('OK');
@@ -101,7 +101,7 @@ export class ChatSession {
     this.inbox = new DurableInbox(ctx.storage);
     this.membership = new MembershipGate((method, body) => this.telegram(method, body));
     this.callbackSetupAt = 0;
-    this.weather = new WeatherAssistant(ctx.storage, env, (chat, text) => this.send(chat, text), () => this.scheduleAlarm());
+    this.weather = new WeatherAssistant(ctx.storage, env, (chat, text) => this.send(chat, text), () => this.scheduleAlarm(), (chat, event) => this.maybeSendChannelMoment(chat, event), chat => this.canReceiveChannelPost(chat));
   }
   fetch(request) {
     if (new URL(request.url).pathname === '/enqueue') return request.json().then(update => this.enqueue(update));
@@ -136,6 +136,8 @@ export class ChatSession {
           await this.disableFollowup();
         }
       }
+      const channelAuto = await this.ctx.storage.get('channelAuto');
+      if (channelAuto?.expiresAt <= Date.now()) await this.ctx.storage.delete('channelAuto');
       const mediaUsage = await this.ctx.storage.get('mediaUsage');
       if (mediaUsage?.expiresAt <= Date.now()) await this.ctx.storage.delete('mediaUsage');
       const instagramUsage = await this.ctx.storage.get('instagramUsage');
@@ -160,7 +162,8 @@ export class ChatSession {
       const mediaUsage = await this.ctx.storage.get('mediaUsage');
       const instagramUsage = await this.ctx.storage.get('instagramUsage');
       const inbox = await this.ctx.storage.get('inbox');
-      const times = [candidate, record?.expiresAt, (followup?.disabled ? null : followup?.dueAt), nextWeatherWake(weather), preview?.expiresAt, mediaUsage?.expiresAt, instagramUsage?.expiresAt, nextInstagramJob(record), nextChannelOffer(record), nextInboxWake(inbox)].filter(time => Number.isFinite(time) && time > 0);
+      const channelAuto = await this.ctx.storage.get('channelAuto');
+      const times = [candidate, record?.expiresAt, (followup?.disabled ? null : followup?.dueAt), nextWeatherWake(weather), preview?.expiresAt, mediaUsage?.expiresAt, instagramUsage?.expiresAt, nextInstagramJob(record), nextChannelOffer(record), nextInboxWake(inbox), channelAuto?.expiresAt].filter(time => Number.isFinite(time) && time > 0);
       if (times.length) await this.ctx.storage.setAlarm(Math.max(Date.now() + 50, Math.min(...times)));
       else await this.ctx.storage.deleteAlarm();
     });
@@ -275,7 +278,7 @@ export class ChatSession {
     if (media) waitUntil = Math.max(waitUntil, (await this.ctx.storage.get('mediaUsage'))?.lastAt + 60000 || 0);
     if (waitUntil > Date.now()) { await this.inbox.defer(waitUntil - Date.now(), job.id); return; }
     let granted = false;
-    try { granted = (await this.capacity({ op: 'start', id: job.id, kind: media || instagramRequest(text) || isMusicCallback(job.update.callback_query?.data) || isChannelCallback(job.update.callback_query?.data) ? 'media' : 'text' })).granted; }
+    try { granted = (await this.capacity({ op: 'start', id: job.id, kind: media || instagramRequest(text) || isMusicCallback(job.update.callback_query?.data) || isChannelCallback(job.update.callback_query?.data) || (automaticChannelPosts(this.env) && (channelRequest(text)?.kind || positiveWeatherContext(text))) ? 'media' : 'text' })).granted; }
     catch { /* Retry admission later, never run without a capacity lease. */ }
     if (!granted) { await this.inbox.defer(undefined, job.id); return; }
     const claimed = await this.inbox.claim(job.id);
@@ -297,7 +300,10 @@ export class ChatSession {
       if (granted) await this.weather.alarm();
       else await this.ctx.storage.put('weather', { ...weather, nextCheckAt: Date.now() + 60000 + Math.floor(Math.random() * 60000) });
     } catch {
-      await this.ctx.storage.put('weather', { ...weather, nextCheckAt: Date.now() + 60000 });
+      // Preserve any event claim/opt-out written before a late error: restoring
+      // the old snapshot could repeat an already billed generation.
+      const current = await this.ctx.storage.get('weather');
+      if (current?.alertsEnabled) await this.ctx.storage.put('weather', { ...current, nextCheckAt: Date.now() + 60000 });
     } finally { await this.capacity({ op: 'finish', id }).catch(() => {}); }
   }
   async reserveInstagram(kind) {
@@ -323,6 +329,57 @@ export class ChatSession {
         String(channel.username || '').toLowerCase() !== LIBRARY_CHANNEL.slice(1) || channel.has_protected_content) throw new Error('Channel unavailable');
     return channel.id;
   }
+  async canReceiveChannelPost(chat) {
+    const allowed = this.env.TELEGRAM_ALLOWED_USER_IDS?.trim() || '';
+    if (allowed !== '*' && !allowed.split(',').map(v => v.trim()).includes(String(chat))) return false;
+    return !membershipRequired(this.env) || await this.membership.check(chat) === 'member';
+  }
+  async forwardLibraryRow(chat, row) {
+    if (!await this.canReceiveChannelPost(chat) || await this.readableChannel() !== row.channelId) throw new Error('Channel unavailable');
+    const current = await this.channelCall('get', { channelId: row.channelId, id: row.id });
+    if (!current || current.version !== row.version || current.revisionAt !== row.revisionAt) throw new Error('Post changed');
+    try { await this.telegram('forwardMessage', { chat_id: chat, from_chat_id: row.channelId, message_id: row.id }); }
+    catch {
+      await this.channelCall('invalidate', { channelId: row.channelId, id: row.id, version: row.version, revisionAt: row.revisionAt }).catch(() => {});
+      throw new Error('Forward unavailable');
+    }
+  }
+  async disableChannelAutomatic() {
+    await this.ctx.storage.put('channelOptOut', true);
+    const usage = await this.ctx.storage.get('channelAuto');
+    if (usage) await this.ctx.storage.put('channelAuto', { lastAt: usage.lastAt, expiresAt: usage.expiresAt });
+  }
+  async maybeSendChannelMoment(chat, event, record = null, inMediaLease = false) {
+    if (!automaticChannelPosts(this.env) || !event || event.severe || event.unsafe) return;
+    let ticket = null;
+    try {
+      const preference = await this.ctx.storage.get('channelOptOut');
+      if (preference === true || (preference !== false && ((await this.ctx.storage.get('followup'))?.disabled || await this.ctx.storage.get('weatherOptOut')))) return;
+      const usage = await this.ctx.storage.get('channelAuto');
+      if (usage?.lastAt && Date.now() - usage.lastAt < AUTO_POST_INTERVAL) return;
+      record ||= await this.ctx.storage.get('session');
+      if (record?.expiresAt <= Date.now()) record = null;
+      if (Date.now() - (record?.channelDeliveryAt || 0) < 10000) return;
+      // Optional weather attachments take their own bounded media lease; never
+      // wait for a slot or delay the factual notification on a busy source.
+      if (!inMediaLease) {
+        ticket = 'weather-' + crypto.randomUUID();
+        if (!(await this.capacity({ op: 'admit', id: ticket })).granted || !(await this.capacity({ op: 'start', id: ticket, kind: 'media' })).granted) return;
+      }
+      if (!await this.canReceiveChannelPost(chat)) return;
+      const channelId = await this.readableChannel();
+      const exclude = [...(record?.channelRecent || []).filter(r => r.channelId === channelId).map(r => r.id), ...(usage?.channelId === channelId ? [usage.postId] : [])].slice(-10);
+      const row = await this.channelCall('find', { channelId, kind: 'moment', weather: event.kind, exclude });
+      if (!row) return; // No unrelated or fabricated fallback post.
+      const marker = { lastAt: Date.now(), expiresAt: Date.now() + AUTO_POST_INTERVAL, channelId, postId: row.id };
+      await this.scheduleAlarm(marker.expiresAt);
+      await this.ctx.storage.put('channelAuto', marker); // Claim before send, including ambiguous timeouts.
+      await this.scheduleAlarm();
+      await this.forwardLibraryRow(chat, row);
+      if (record) { record.channelRecent = [...(record.channelRecent || []), { channelId, id: row.id }].slice(-10); await this.persist(record); }
+    } catch { /* Optional extra: no blind retry, provider fallback or raw logs. */ }
+    finally { if (ticket) await this.capacity({ op: 'finish', id: ticket }).catch(() => {}); }
+  }
   async offerChannelPost(chat, request, record) {
     if (!request.kind) { await this.send(chat, 'از پست‌های جدید کانال چی می‌خوای؟ 🌱\n/song آهنگ — /clip کلیپ — /quote جمله\nمثلاً: /song شاد\nانتخاب از توضیح و کپشنه، نه شنیدن یا دیدن فایل.'); return; }
     if (Date.now() - (record.channelOfferAt || 0) < 4000) { await this.send(chat, 'چند ثانیه صبر کن، بعد از کانال انتخاب می‌کنیم 🌱'); return; }
@@ -331,6 +388,13 @@ export class ChatSession {
       const channelId = await this.readableChannel();
       const row = await this.channelCall('find', { channelId, kind: request.kind, query: request.query, exclude: (record.channelRecent || []).filter(r => r.channelId === channelId).map(r => r.id) });
       if (!row) { await this.send(chat, 'بین پست‌های ثبت‌شدهٔ کانال، گزینهٔ متناسب پیدا نکردم 🌱 فقط پست‌های جدیدِ بعد از فعال‌شدن این قابلیت رو می‌شناسم؛ می‌تونی درخواستت رو ساده‌تر بگی یا خود کانال رو ببینی: ' + LIBRARY_CHANNEL); return; }
+      if (automaticChannelPosts(this.env)) {
+        if (Date.now() - Math.max(record.channelDeliveryAt || 0, (await this.ctx.storage.get('channelAuto'))?.lastAt || 0) < 10000) { await this.send(chat, 'بین ارسال پست‌های کانال ده ثانیه فاصله بذار 🌱'); return; }
+        record.channelDeliveryAt = Date.now(); await this.persist(record);
+        await this.forwardLibraryRow(chat, row);
+        record.channelRecent = [...(record.channelRecent || []), { channelId, id: row.id }].slice(-10); await this.persist(record);
+        return;
+      }
       const token = crypto.randomUUID().replaceAll('-', '');
       const offer = { token, channelId, id: row.id, version: row.version, revisionAt: row.revisionAt, expiresAt: Date.now() + OFFER_TTL, messageId: null, used: false };
       record.channelOffers = [...(record.channelOffers || []).filter(o => o.expiresAt > Date.now()).slice(-2), offer];
@@ -344,13 +408,13 @@ export class ChatSession {
         ] } });
       if (!Number.isSafeInteger(result?.message_id) || result.message_id <= 0) throw new Error('Delivery unavailable');
       offer.messageId = result.message_id; await this.persist(record);
-    } catch { await this.send(chat, 'الان دسترسی به پست‌های قابل‌ارسال کانال ندارم؛ کمی بعد امتحان کن 🌱'); }
+    } catch { await this.send(chat, 'الان نتونستم انتخاب یا ارسال پست رو تأیید کنم؛ برای جلوگیری از ارسال تکراری، خودکار دوباره تلاش نمی‌کنم 🌱'); }
   }
   async deliverChannelPost(chat, callback, record) {
     const offer = record.channelOffers?.find(o => o.token === callback.data.slice(7) && o.messageId === callback.message.message_id && o.expiresAt > Date.now());
     if (!offer) { await this.send(chat, 'این انتخاب دیگه معتبر نیست؛ با /channel دوباره انتخاب کن 🌱'); return; }
     if (offer.used) { await this.send(chat, 'این انتخاب قبلاً مصرف شده؛ برای انتخاب تازه /channel رو بزن 🌱'); return; }
-    if (Date.now() - (record.channelDeliveryAt || 0) < 10000) { await this.send(chat, 'بین ارسال پست‌های کانال ده ثانیه فاصله بذار 🌱'); return; }
+    if (Date.now() - Math.max(record.channelDeliveryAt || 0, (await this.ctx.storage.get('channelAuto'))?.lastAt || 0) < 10000) { await this.send(chat, 'بین ارسال پست‌های کانال ده ثانیه فاصله بذار 🌱'); return; }
     // Claim before any Telegram send. A timeout can hide successful delivery;
     // never retry it blindly or fall back to a cached file_id/copyMessage.
     offer.used = true; record.channelDeliveryAt = Date.now(); await this.persist(record);
@@ -359,11 +423,7 @@ export class ChatSession {
       if (channelId !== offer.channelId) throw new Error('Channel changed');
       const row = await this.channelCall('get', { channelId, id: offer.id });
       if (!row || row.version !== offer.version || row.revisionAt !== offer.revisionAt) { await this.send(chat, 'پست حذف، ویرایش یا غیرقابل‌ارسال شده؛ با /channel دوباره انتخاب کن 🌱'); return; }
-      try { await this.telegram('forwardMessage', { chat_id: chat, from_chat_id: channelId, message_id: row.id }); }
-      catch {
-        await this.channelCall('invalidate', { channelId, id: row.id, version: row.version, revisionAt: row.revisionAt }).catch(() => {});
-        throw new Error('Forward unavailable');
-      }
+      await this.forwardLibraryRow(chat, row);
       record.channelRecent = [...(record.channelRecent || []), { channelId, id: row.id }].slice(-10); await this.persist(record);
       await this.telegram('editMessageReplyMarkup', { chat_id: chat, message_id: offer.messageId, reply_markup: { inline_keyboard: [] } }).catch(() => {});
     } catch { await this.send(chat, 'نتونستم ارسال این پست رو تأیید کنم؛ ممکنه حذف یا محدود شده باشه. ارسال خودکار دوباره انجام نمی‌دم؛ از /channel انتخاب تازه بگیر 🌱'); }
@@ -505,7 +565,7 @@ export class ChatSession {
         return ok();
       }
       // Privacy, cancellation and public contact remain available without joining.
-      const gateExempt = ['/stop', '/reset', '/privacy', '/about', '/help', '/weatherstop', '/forgetcity'].includes(command) || isCreatorQuestion(text);
+      const gateExempt = ['/stop', '/reset', '/privacy', '/about', '/help', '/weatherstop', '/forgetcity', '/channelstop'].includes(command) || isCreatorQuestion(text);
       if (membershipRequired(this.env) && !gateExempt) {
         await this.prepareMembershipButtons(update.webhookURL);
         const status = await this.membership.check(chat);
@@ -514,6 +574,7 @@ export class ChatSession {
       if (command === '/reset' || command === '/start') {
         if (command === '/reset') {
           await this.disableFollowup();
+          await this.disableChannelAutomatic();
           await this.weather.stop(true);
         }
         record.messages = [];
@@ -532,16 +593,19 @@ export class ChatSession {
         return ok();
       }
       if (command === '/stop') {
+        await this.disableChannelAutomatic();
         await this.disableFollowup();
         await this.weather.stop();
         await this.scheduleAlarm();
         await this.send(chat, 'همهٔ پیام‌های خودکار خاموش شد ✅🌱 احوال‌پرسی: /followup — هشدار هوا: /alerts');
         return ok();
       }
+      if (command === '/channelstop') { await this.disableChannelAutomatic(); await this.send(chat, 'پست خودکار کانال خاموش شد 🌱 درخواست مستقیم /song و /clip و /quote همچنان کار می‌کنه. فعال‌سازی دوباره: /channelauto'); return ok(); }
+      if (command === '/channelauto') { await this.ctx.storage.put('channelOptOut', false); await this.send(chat, 'پست مرتبطِ خودکار فعال شد 🌱 حداکثر روزی یک پست کنار گفتگوی مرتبط یا خبر هوا؛ لغو: /channelstop یا /stop'); return ok(); }
       if (command === '/about') { await this.send(chat, ABOUT); return ok(); }
       if (command === '/privacy') { await this.send(chat, CLOUD_PRIVACY); return ok(); }
       if (command === '/help') {
-        await this.send(chat, '/start سلام و شروع دوباره\n/about دربارهٔ امیر\n/creator ارتباط با سازنده\n/reset پاک‌کردن حافظهٔ فعال گفتگو\n/privacy حریم خصوصی\n/followup فعال‌سازی دوبارهٔ احوال‌پرسی\n/stop لغو همهٔ پیام‌های خودکار\n/image توضیح عکس دلخواه\n/voice سؤال یا خواندن پاسخ قبلی با صدای مصنوعی\n/channel انتخاب از پست‌های جدید کانال\n/song آهنگ از کانال — /clip کلیپ — /quote جمله\nلینک ریلز یا پست ویدئویی عمومی: دریافت ویدئو و دکمهٔ شناسایی موسیقی؛ هر نفر روزی ۵ تلاش برای هر بخش، حداکثر ۲۰ مگابایت\n/date تاریخ، روز هفته و مناسبت‌های ثبت‌شده\n/prices قیمت دلار و طلا\n/news یا «چه خبر؟» اخبار ایران\n/city نام شهر\n/weather وضعیت هوا\n/test_snow تست شخصی برف (آزمایشی)\n/alerts فعال‌کردن هشدار بارش\n/weatherstop خاموش‌کردن هشدار هوا\n/forgetcity حذف شهر\n\nورودی فقط متن در چت خصوصی؛ عکس و ویس فقط با درخواست خودت، از اعتبار مدیر و با سقف مصرف. هر نفر روزی پنج عکس و سه ویس؛ کل ربات ده عکس و ده ویس (روز UTC). صدای ویس مصنوعیه. من هوش مصنوعی‌ام و جایگزین درمانگر یا خدمات اضطراری نیستم.');
+        await this.send(chat, '/start سلام و شروع دوباره\n/about دربارهٔ امیر\n/creator ارتباط با سازنده\n/reset پاک‌کردن حافظهٔ فعال گفتگو\n/privacy حریم خصوصی\n/followup فعال‌سازی دوبارهٔ احوال‌پرسی\n/stop لغو همهٔ پیام‌های خودکار\n/image توضیح عکس دلخواه\n/voice سؤال یا خواندن پاسخ قبلی با صدای مصنوعی\n/channel انتخاب از پست‌های جدید کانال\n/song آهنگ از کانال — /clip کلیپ — /quote جمله\n/channelstop لغو پست خودکار کانال — /channelauto فعال‌سازی\nلینک ریلز یا پست ویدئویی عمومی: دریافت ویدئو و دکمهٔ شناسایی موسیقی؛ هر نفر روزی ۵ تلاش برای هر بخش، حداکثر ۲۰ مگابایت\n/date تاریخ، روز هفته و مناسبت‌های ثبت‌شده\n/prices قیمت دلار و طلا\n/news یا «چه خبر؟» اخبار ایران\n/city نام شهر\n/weather وضعیت هوا\n/test_snow یا /test_rain یا /test_cloud تست شخصی و ساختگی هوا\n/alerts فعال‌کردن خبر باران، برف و هوای ابری\n/weatherstop خاموش‌کردن هشدار هوا\n/forgetcity حذف شهر\n\nورودی فقط متن در چت خصوصی؛ عکس و ویس فقط با درخواست خودت، از اعتبار مدیر و با سقف مصرف. هر نفر روزی پنج عکس و سه ویس؛ کل ربات ده عکس و ده ویس (روز UTC). صدای ویس مصنوعیه. من هوش مصنوعی‌ام و جایگزین درمانگر یا خدمات اضطراری نیستم.');
         return ok();
       }
       if (isCreatorQuestion(text)) {
@@ -551,8 +615,8 @@ export class ChatSession {
         await this.persist(record);
         return ok();
       }
-      if (command === '/test_snow') {
-        await this.weather.previewSnow(chat);
+      if (['/test_snow', '/test_rain', '/test_cloud'].includes(command)) {
+        await this.weather.previewWeather(chat, command.slice(6));
         return ok();
       }
       if (command === '/weatherstop' || command === '/forgetcity') {
@@ -664,6 +728,7 @@ export class ChatSession {
       record.messages = [...messages, { role: 'assistant', content: answer }].slice(-HISTORY_LIMIT);
       record.expiresAt = Date.now() + TTL;
       await this.persist(record);
+      await this.maybeSendChannelMoment(chat, positiveWeatherContext(text), record, asyncUpdates(this.env)).catch(() => {});
     } catch {
       // Update is reserved even when provider/delivery fails. User can send a new
       // message; do not retry blindly and incur additional OpenRouter charges.

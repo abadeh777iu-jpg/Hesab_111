@@ -73,8 +73,8 @@ export async function getWeather(city, fetchImpl = fetch) {
   const url = new URL(WEATHER_URL);
   url.search = new URLSearchParams({
     latitude: String(city.latitude), longitude: String(city.longitude),
-    current: 'temperature_2m,weather_code',
-    hourly: 'precipitation_probability,rain,snowfall,weather_code',
+    current: 'temperature_2m,weather_code,cloud_cover',
+    hourly: 'precipitation_probability,rain,snowfall,weather_code,cloud_cover',
     forecast_days: '2', timezone: 'auto', timeformat: 'unixtime',
   });
   const data = await getJson(url.href, fetchImpl);
@@ -110,6 +110,35 @@ export function upcomingPrecipitation(data, now = Date.now()) {
   }
   return null;
 }
+// Keep precipitation onset semantics intact; cloud cover is NOT rain probability.
+export function upcomingWeatherMoment(data, now = Date.now()) {
+  const dangerous = code => [45, 48, 56, 57, 65, 66, 67, 75, 82, 86, 95, 96, 99].includes(code);
+  const precipitation = upcomingPrecipitation(data, now);
+  if (precipitation) return { ...precipitation, unsafe: dangerous(data.current?.weather_code) };
+  const hourly = data.hourly;
+  const wet = code => [51, 53, 55, 61, 63, 71, 73, 77, 80, 81, 85].includes(code);
+  if (dangerous(data.current?.weather_code) || wet(data.current?.weather_code)) return null;
+  if (hourly.time.some((time, i) => time * 1000 >= now - 3600000 && time * 1000 <= now + WEATHER_LOOKAHEAD && dangerous(hourly.weather_code?.[i]))) return null;
+  const cloudy = (code, cover) => [2, 3].includes(code) && Number.isFinite(cover) && cover >= 80 && cover <= 100;
+  const currentAt = data.current?.time * 1000;
+  if (cloudy(data.current?.weather_code, data.current?.cloud_cover) && currentAt <= now + 300000 && currentAt >= now - 3600000) {
+    return { kind: 'cloud', at: currentAt, current: true, cloudCover: data.current.cloud_cover, severe: false };
+  }
+  for (let i = 0; i + 1 < hourly.time.length; i++) {
+    const at = hourly.time[i] * 1000;
+    if (at <= now + 300000 || at > now + WEATHER_LOOKAHEAD || hourly.time[i + 1] - hourly.time[i] !== 3600) continue;
+    if (cloudy(hourly.weather_code?.[i], hourly.cloud_cover?.[i]) && cloudy(hourly.weather_code?.[i + 1], hourly.cloud_cover?.[i + 1])) {
+      return { kind: 'cloud', at, current: false, cloudCover: hourly.cloud_cover[i], severe: false };
+    }
+  }
+  return null;
+}
+export function weatherMomentFallback(event) {
+  if (event.severe || event.unsafe) return 'قشنگ‌ترین همراهی این لحظه، مراقبت آروم از خودته 🌱';
+  return { rain: 'اگه بارون رو دوست داری، شاید تماشاش از یه جای امن بهونهٔ یه مکث کوچیک باشه 🌧️',
+    snow: 'اگه برف رو دوست داری، تماشای آروم دونه‌هاش می‌تونه بهونهٔ یه مکث کوچیک باشه ❄️',
+    cloud: 'اگه ابرها رو دوست داری، یه نگاه آروم به آسمون رو به خودت هدیه بده ☁️' }[event.kind] || null;
+}
 function weatherDescription(code) {
   if ([0, 1].includes(code)) return 'صاف یا کم‌ابر ☀️';
   if ([2, 3].includes(code)) return 'ابری ☁️';
@@ -126,11 +155,16 @@ export function weatherSummary(city, data) {
 }
 export function weatherAlert(city, event, timezone, sentence = null, isTest = false) {
   const kind = event.kind === 'snow' ? 'برف ❄️' : 'باران 🌧️';
-  const care = event.severe ? 'احتمال بارش شدید؛ قبل از بیرون‌رفتن هشدارهای رسمی رو چک کن ⚠️' : 'اگر بیرون میری، آماده باش 🙂';
-  const header = isTest ? '🧪 آزمایشی — این خبر واقعی برف نیست\n\n' : '';
+  sentence ||= weatherMomentFallback(event);
+  const care = event.severe ? 'احتمال بارش شدید؛ قبل از بیرون‌رفتن هشدارهای رسمی رو چک کن ⚠️' : event.unsafe ? 'شرایط فعلی می‌تونه نیاز به احتیاط داشته باشه؛ هشدارهای رسمی رو چک کن ⚠️' : 'اگر بیرون میری، آماده باش 🙂';
+  const header = isTest ? `🧪 آزمایشی — این خبر واقعی ${{ snow: 'برف', rain: 'باران', cloud: 'هوای ابری' }[event.kind]} نیست\n\n` : '';
   const footer = isTest
-    ? 'زمان و احتمال بالا ساختگی‌اند؛ منبع هوا فراخوانی نشده.\nاین تست هشدارها یا شهر ذخیره‌شده رو تغییر نمی‌ده.'
+    ? 'زمان و وضعیت بالا ساختگی‌اند؛ منبع هوا فراخوانی نشده.\nاین تست هشدارها یا شهر ذخیره‌شده رو تغییر نمی‌ده.'
     : 'منبع: Open-Meteo؛ پیش‌بینی ممکنه تغییر کنه.\nلغو: /weatherstop';
+  if (event.kind === 'cloud') {
+    const outlook = event.current ? 'طبق دادهٔ هوا، آسمون ابریه ☁️' : `هوای ابری ☁️ حوالی ${localTime(event.at, timezone)} پیش‌بینی شده`;
+    return `${header}${city.name}: ${outlook}\n${event.current ? 'زمان داده' : 'زمان پیش‌بینی'}: ${localTime(event.at, timezone)}${sentence ? '\n' + sentence : ''}\n${footer}`;
+  }
   return `${header}${city.name}: احتمال ${kind} حوالی ${localTime(event.at, timezone)}، ${fa.format(event.probability)}٪\n${care}${sentence ? `\n${sentence}` : ''}\n${footer}`;
 }
 
