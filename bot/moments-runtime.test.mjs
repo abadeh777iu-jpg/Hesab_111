@@ -12,6 +12,7 @@ test('workerd composes cloud facts, one AI sentence and a bounded native post; d
       constructor(ctx, env) { super(ctx, { ...env, fetchImpl: (url, options) => env.UPSTREAM.fetch(url, options) }); this.storage = ctx.storage; }
       async fetch(request) {
         const path = new URL(request.url).pathname;
+        if (path === '/test-inspect-weather') return Response.json(await this.storage.get('weather') || null);
         if (path === '/test-weather') {
           const record = await this.storage.get('weather') || { city: { name: 'آباده', latitude: 31.16, longitude: 52.65 }, chatId: 42, alertsEnabled: true };
           record.nextCheckAt = Date.now() - 1; await this.storage.put('weather', record);
@@ -73,6 +74,8 @@ test('workerd composes cloud facts, one AI sentence and a bounded native post; d
   await first.fetch('https://test/test-weather'); data = await stats(); assert.equal(data.models, 1); assert.equal(data.forwards.length, 1);
   await dispatch({ update_id: 2, message: { from: { id: 43 }, chat: { id: 43, type: 'private' }, text: '/song ابری' } });
   await chats.get(chats.idFromName('43')).fetch('https://test/test-drain');
-  data = await stats(); assert.equal(data.forwards.length, 2); assert.equal(data.forwards[1].chat_id, 43); assert.equal(data.models, 1);
+  data = await stats(); assert.equal(data.forwards.length, 2); assert.equal(data.forwards[1].chat_id, 43); assert.ok(data.models >= 1 && data.models <= 2);
+  const automatic = await (await chats.get(chats.idFromName('43')).fetch('https://test/test-inspect-weather')).json();
+  assert.equal(automatic.alertsEnabled, true); assert.equal(automatic.city.name, 'آباده، استان فارس'); assert.ok(automatic.nextCheckAt > 0);
   assert.ok(!data.sent.some(row => row.reply_markup?.inline_keyboard?.[0]?.[0]?.callback_data?.startsWith('chpick:')));
 });

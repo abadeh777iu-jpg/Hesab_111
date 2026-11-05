@@ -166,6 +166,7 @@ test('opt-in survives history cleanup and object recreation; one check-in after 
   let now = 1_800_000_000_000;
   t.mock.method(Date, 'now', () => now);
   const { env, state, storage, calls, session, alarmAt } = setup();
+  state.set('weatherOptOut', true); // Isolate the check-in alarm from default weather.
   await createWorker().fetch(request(update(1, '/followup')), env);
   const dueAt = now + FOLLOWUP_DELAY;
   assert.equal(state.get('followup').dueAt, dueAt);
@@ -372,8 +373,9 @@ test('natural price questions use the shared market binding, not model guesses',
   } }) };
   await createWorker().fetch(request(update(1, 'قیمت دلار چنده؟')), env);
   assert.equal(feedCalls, 1);
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0].body.text, 'نرخ معتبر منبع؛ زمان اعلام‌شده');
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].body.text, FOLLOWUP_NOTICE);
+  assert.equal(calls[1].body.text, 'نرخ معتبر منبع؛ زمان اعلام‌شده');
 });
 
 test('live query rate limiting avoids repeated external requests', async () => {
@@ -433,9 +435,9 @@ test('existing conversations receive a brief weather notice once, without a city
   state.set('followup', { chatId: 42, dueAt: Date.now() + FOLLOWUP_DELAY, noticeShown: true });
   const worker = createWorker();
   await worker.fetch(request(update(1, '/start')), env);
-  assert.equal(calls.length, 2); // short hello + one new weather notice
-  assert.ok(!/هوا|باران|برف|آباده/.test(calls[1].body.text));
-  assert.ok(!calls[1].body.text.includes('کدوم'));
+  assert.equal(calls.length, 1); // Previously delivered generic notice is reused.
+  assert.ok(!/هوا|باران|برف|آباده/.test(calls[0].body.text));
+  assert.ok(!calls[0].body.text.includes('کدوم'));
   calls.length = 0;
   await worker.fetch(request(update(2, '/start')), env);
   assert.equal(calls.length, 1);
@@ -510,7 +512,7 @@ function mediaSetup() {
   return { ...rig, budgetState };
 }
 
-test('explicit image request uploads one real file only to the requester, no surprise enrollment or duplicate charge', async () => {
+test('explicit image request uploads one real file only to the requester, default weather without a check-in timer or duplicate charge', async () => {
   const { env, state, calls, budgetState } = mediaSetup();
   const worker = createWorker();
   await Promise.all([worker.fetch(request(update(1, 'برام یه عکس کلبه برفی بساز')), env), worker.fetch(request(update(1, 'برام یه عکس کلبه برفی بساز')), env)]);
@@ -519,8 +521,8 @@ test('explicit image request uploads one real file only to the requester, no sur
   assert.equal(uploads.length, 1);
   assert.equal(uploads[0].body.get('chat_id'), '42');
   assert.equal(uploads[0].body.get('photo').type, 'image/png');
-  assert.equal(state.has('weather'), false);
-  assert.equal(state.has('followup'), false);
+  assert.equal(state.get('weather').alertsEnabled, true);
+  assert.equal(state.get('followup').dueAt, undefined);
   assert.equal(state.get('mediaUsage').image, 1);
   assert.equal(budgetState.get('budget').image, 1);
   assert.deepEqual(state.get('session').messages, []); // no image/prompt persistence
@@ -535,10 +537,10 @@ test('voice question preserves readable response and history, then sends an AI-l
   assert.equal(voice.body.get('chat_id'), '42');
   assert.ok(voice.body.get('caption').includes('صدای واقعی شخص امیر نیست'));
   assert.equal(voice.body.get('voice').type, 'audio/mpeg');
-  assert.ok(calls.find(call => call.url.endsWith('/sendMessage')).body.text.includes('یه قدم کوچیک'));
+  assert.ok(calls.some(call => call.url.endsWith('/sendMessage') && call.body.text.includes('یه قدم کوچیک')));
   assert.equal(state.get('session').messages.length, 2);
-  assert.equal(state.has('weather'), false);
-  assert.equal(state.has('followup'), false);
+  assert.equal(state.get('weather').alertsEnabled, true);
+  assert.equal(state.get('followup').dueAt, undefined);
 });
 
 test('/voice reuses the last answer without another chat-model charge', async () => {
@@ -605,7 +607,7 @@ test('failed speech keeps the text, consumes an attempt and never leaks raw erro
   assert.equal(calls.filter(call => call.url.endsWith('/audio/speech')).length, 1);
   assert.equal(calls.filter(call => call.url.endsWith('/sendVoice')).length, 0);
   const messages = calls.filter(call => call.url.endsWith('/sendMessage'));
-  assert.ok(messages[0].body.text.includes('یه قدم کوچیک'));
+  assert.ok(messages.some(message => message.body.text.includes('یه قدم کوچیک')));
   assert.ok(messages.at(-1).body.text.includes('اعتبار'));
   assert.ok(!JSON.stringify(messages).includes('private upstream'));
   assert.equal(state.get('mediaUsage').voice, 1);
@@ -626,6 +628,7 @@ test('per-chat budget cleanup alarm survives history expiry and removes only its
   let now = 1_800_000_000_000;
   t.mock.method(Date, 'now', () => now);
   const { env, session, state, calls, alarmAt } = mediaSetup();
+  state.set('weatherOptOut', true); // Isolate media cleanup from weather scheduling.
   await createWorker().fetch(request(update(1, '/image snow')), env);
   calls.length = 0;
   now += 31 * 60_000;
@@ -684,8 +687,8 @@ test('Free.ai default isolates image/speech from OpenRouter chat and still uses 
   assert.equal(state.get('mediaUsage').voice, 1);
   assert.equal(budgetState.get('budget').image, 1);
   assert.equal(budgetState.get('budget').voice, 1);
-  assert.equal(state.has('weather'), false);
-  assert.equal(state.has('followup'), false);
+  assert.equal(state.get('weather').alertsEnabled, true);
+  assert.equal(state.get('followup').dueAt, undefined);
 });
 
 test('missing Free.ai key or voice for a custom model never reserves budget or falls back to OpenRouter', async () => {
@@ -763,7 +766,7 @@ test('Free.ai permits five images per person, ten in total, and refreshes both q
 });
 
 
-test('voice works with just the Free.ai key using default Persian configuration, without surprise enrollment', async () => {
+test('voice works with just the Free.ai key using default Persian configuration, with default weather and no extra check-in timer', async () => {
   const { env, calls, state } = freeAIMediaSetup();
   delete env.FREEAI_TTS_MODEL;
   delete env.FREEAI_TTS_VOICE;
@@ -774,8 +777,8 @@ test('voice works with just the Free.ai key using default Persian configuration,
   assert.equal(speech.body.language, 'fa');
   assert.equal(calls.filter(call => call.url.endsWith('/sendVoice')).length, 1);
   assert.equal(state.get('mediaUsage').voice, 1);
-  assert.equal(state.has('followup'), false);
-  assert.equal(state.has('weather'), false);
+  assert.equal(state.get('followup').dueAt, undefined);
+  assert.equal(state.get('weather').alertsEnabled, true);
 });
 
 test('a rejected Free.ai voice shows only its safe diagnostic code and retains text, without retry or fallback', async () => {
@@ -793,7 +796,7 @@ test('a rejected Free.ai voice shows only its safe diagnostic code and retains t
   assert.equal(calls.filter(call => call.url.endsWith('/audio/speech')).length, 0);
   assert.equal(calls.filter(call => call.url.endsWith('/sendVoice')).length, 0);
   const messages = calls.filter(call => call.url.endsWith('/sendMessage')).map(call => call.body.text);
-  assert.ok(messages[0].includes('یه قدم کوچیک'));
+  assert.ok(messages.some(message => message.includes('یه قدم کوچیک')));
   assert.ok(messages.at(-1).includes('MEDIA_HTTP_400_LANGUAGE'));
   assert.ok(!messages.join(' ').includes('private-transcript'));
   assert.ok(!messages.join(' ').includes('sk-free-secret'));
@@ -826,8 +829,8 @@ test('approved default split keeps images on Free.ai but sends voice only to Ope
   assert.equal(calls.filter(call => call.url.endsWith('/sendVoice')).length, 1);
   assert.equal(state.get('mediaUsage').voice, 1);
   assert.equal(state.get('mediaUsage').image, 1);
-  assert.equal(state.has('weather'), false);
-  assert.equal(state.has('followup'), false);
+  assert.equal(state.get('weather').alertsEnabled, true);
+  assert.equal(state.get('followup').dueAt, undefined);
 });
 
 test('switching the voice provider does not clear spent attempts or require a Free.ai key for voice', async t => {
@@ -899,7 +902,7 @@ test('چه خبر uses shared Iran news, one isolated rewrite and attributed lin
   assert.ok(reply.text.includes('https://www.isna.ir/news/123/test'));
   assert.deepEqual(reply.link_preview_options, { is_disabled: true });
   assert.equal(state.has('mediaUsage'), false);
-  assert.equal(state.has('followup'), false);
+  assert.equal(state.get('followup').dueAt, undefined);
   assert.ok(state.get('session').messages.length <= 30);
   await createWorker().fetch(request(update(1, 'چه خبر؟')), env);
   assert.equal(feedCalls, 1);
@@ -941,7 +944,7 @@ test('rewrite billing error is actionable, does not replace news with headlines,
   assert.equal(calls.filter(call => call.url.includes('openrouter.ai')).length, 1);
 });
 
-test('date questions use only the shared calendar, preserve bounded history and do not enroll new alerts or consume media/model budgets', async () => {
+test('date questions use only the shared calendar, preserve bounded history and enroll default weather without consuming media/model budgets', async () => {
   const { env, calls, state } = setup(); let calendarCalls = 0;
   env.MARKETS = { idFromName: name => { assert.equal(name, 'iran-calendar'); return name; }, get: () => ({ fetch: async url => {
     calendarCalls++; assert.equal(url, 'https://market.internal/calendar');
@@ -953,7 +956,7 @@ test('date questions use only the shared calendar, preserve bounded history and 
   assert.ok(calls.at(-1).body.text.includes('روز دانش‌آموز'));
   assert.equal(state.get('session').messages.at(-1).content, calls.at(-1).body.text);
   assert.ok(state.get('session').messages.length <= 30);
-  assert.equal(state.has('mediaUsage'), false); assert.equal(state.has('followup'), false);
+  assert.equal(state.has('mediaUsage'), false); assert.equal(state.get('followup').dueAt, undefined);
   await worker.fetch(request(update(1, 'امروز چندمه؟')), env);
   await worker.fetch(request(update(2, '/date')), env);
   assert.equal(calendarCalls, 1);
@@ -1055,7 +1058,8 @@ test('join callback is acknowledged, rechecks the clicking user and unlocks no p
   assert.ok(f.calls.some(c => c.url.endsWith('/editMessageReplyMarkup') && c.body.message_id === 10));
   assert.equal(f.calls.filter(c => c.url.includes('openrouter.ai')).length, 0);
   assert.equal(f.state.get('session').messages.length, 0);
-  assert.equal(f.state.has('followup'), false);
+  assert.equal(f.state.get('followup').dueAt, undefined)
+  assert.equal(f.state.get('weather').alertsEnabled, true);
   const length = f.calls.length;
   await worker.fetch(request(joinCallback(3)), f.env); assert.equal(f.calls.length, length);
   await worker.fetch(request(update(4, 'سلام')), f.env);
@@ -1136,7 +1140,7 @@ async function withInstagram() {
   return f;
 }
 
-test('Instagram public link uploads actual video with music button, stripping tracking, and does not consume model/media credits or enroll alerts', async () => {
+test('Instagram public link uploads actual video with music button, stripping tracking, and does not consume model/media credits while enrolling default weather', async () => {
   const f = await withInstagram();
   await createWorker().fetch(request(update(1, 'https://www.instagram.com/reel/DfUr8XJoNJC/?exln=secret-tracking')), f.env);
   const sent = f.calls.find(c => c.url.endsWith('/sendVideo'));
@@ -1144,7 +1148,9 @@ test('Instagram public link uploads actual video with music button, stripping tr
   assert.ok(!sent.body.caption.includes('secret-tracking'));
   assert.equal(f.calls.filter(c => c.url.includes('songfinder') || c.url.includes('openrouter')).length, 0);
   assert.equal(f.state.get('instagramUsage').video, 1);
-  for (const key of ['mediaUsage', 'followup', 'weather']) assert.equal(f.state.has(key), false);
+  assert.equal(f.state.has('mediaUsage'), false);
+  assert.equal(f.state.get('followup').dueAt, undefined);
+  assert.equal(f.state.get('weather').alertsEnabled, true);
   assert.equal(f.state.get('session').instagramJobs[0].messageId, 777);
   assert.equal(f.state.get('session').messages.length, 0);
 });
@@ -1206,6 +1212,7 @@ test('Instagram links and music callbacks remain subject to channel membership, 
 test('expired Instagram callback URLs are purged by an alarm even while the normal chat session is still active', async t => {
   let now = Date.now(); t.mock.method(Date, 'now', () => now);
   const f = await withInstagram();
+  f.state.set('weatherOptOut', true); // Isolate expiring callback metadata.
   await createWorker().fetch(request(update(1, 'https://www.instagram.com/reel/DfUr8XJoNJC/')), f.env);
   const record = f.state.get('session'), end = record.instagramJobs[0].expiresAt;
   record.expiresAt = end + 60000; f.state.set('session', record);
@@ -1367,4 +1374,45 @@ test('switching to legacy ingress does not strand already accepted durable jobs 
   f.env.BOT_ASYNC_UPDATES = 'false'; now += 200; await f.session.alarm();
   assert.equal(f.state.get('inbox').pending.length, 0);
   assert.equal(f.calls.filter(c => c.url.includes('openrouter.ai')).length, 1);
+});
+
+test('a first feature-only interaction automatically enrolls weather without requiring alerts or arming check-ins', async () => {
+  const f = setup(); f.env.MARKETS = { idFromName: name => name, get: () => ({ fetch: async () => new Response('تاریخ معتبر') }) };
+  const worker = createWorker(); await worker.fetch(request(update(1, '/date')), f.env);
+  assert.equal(f.state.get('weather').alertsEnabled, true); assert.equal(f.state.get('weather').chatId, 42);
+  assert.equal(f.state.get('weather').city.name, 'آباده، استان فارس');
+  assert.equal(f.state.get('followup').noticeShown, true); assert.equal(f.state.get('followup').dueAt, undefined);
+  assert.equal(f.calls.filter(c => c.body.text === FOLLOWUP_NOTICE).length, 1);
+  await worker.fetch(request(update(2, '/start')), f.env);
+  assert.equal(f.calls.filter(c => c.body.text === FOLLOWUP_NOTICE).length, 1);
+  assert.ok(f.state.get('followup').dueAt > Date.now());
+});
+
+test('a known previously notified chat migrates inactive weather on its existing alarm, without a new command or repeated notice', async t => {
+  const now = Date.now(); t.mock.method(Date, 'now', () => now);
+  const f = setup();
+  f.state.set('followup', { chatId: 42, noticeShown: true, disabled: false, dueAt: now + FOLLOWUP_DELAY });
+  f.state.set('weather', { chatId: 42, city: { name: 'شیراز', latitude: 29.59, longitude: 52.58 }, alertsEnabled: false, nextCheckAt: null });
+  await f.session.alarm();
+  assert.equal(f.state.get('weather').alertsEnabled, true); assert.equal(f.state.get('weather').nextCheckAt, now + 1000);
+  assert.equal(f.state.get('weather').city.name, 'شیراز'); assert.equal(f.calls.length, 0); assert.equal(f.alarmAt(), now + 1000);
+});
+
+test('lazy background migration does not resurrect cancellations, contact unauthorized users or send cold disclosures', async () => {
+  for (const reason of ['weatherstop', 'globalstop', 'revoked', 'undisclosed']) {
+    const f = setup();
+    f.state.set('followup', { chatId: 42, noticeShown: reason !== 'undisclosed', disabled: reason === 'globalstop' });
+    f.state.set('weather', { chatId: 42, city: { name: 'custom', latitude: 20, longitude: 30 }, alertsEnabled: false, nextCheckAt: null });
+    if (reason === 'weatherstop') f.state.set('weatherOptOut', true);
+    if (reason === 'revoked') f.env.TELEGRAM_ALLOWED_USER_IDS = '99';
+    await f.session.alarm(); assert.equal(f.state.get('weather').alertsEnabled, false); assert.equal(f.calls.length, 0);
+  }
+});
+
+test('failed generic disclosure prevents feature-only enrollment before any generation or external data call', async () => {
+  const f = setup(); let feeds = 0;
+  f.env.MARKETS = { idFromName: name => name, get: () => ({ fetch: async () => { feeds++; return new Response('data'); } }) };
+  f.env.fetchImpl = async () => { throw new Error('private delivery problem'); };
+  await createWorker().fetch(request(update(1, '/date')), f.env);
+  assert.equal(f.state.has('weather'), false); assert.equal(f.state.has('followup'), false); assert.equal(feeds, 0);
 });

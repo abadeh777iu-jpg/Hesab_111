@@ -44,12 +44,15 @@ export class WeatherAssistant {
     await this.reschedule();
   }
   async ensureAutomatic(chat, noticeAlreadyDelivered = false) {
-    // Preserve every explicit selection/opt-out, including choices made before
-    // automatic defaults were introduced. Never overwrite a custom city.
-    if (await this.storage.get('weatherOptOut') || await this.storage.get('weather')) return;
+    // A stored city/draft is not an opt-out. Older versions left these records
+    // disabled until /alerts; migrate them while preserving explicit cancellations.
+    if (await this.storage.get('weatherOptOut')) return false;
+    const record = await this.storage.get('weather') || {};
+    if (record.city && record.alertsEnabled && record.chatId === chat && Number.isFinite(record.nextCheckAt) && record.nextCheckAt > 0) return false;
     if (!noticeAlreadyDelivered) await this.send(chat, WEATHER_NOTICE);
-    await this.save({ city: { ...DEFAULT_CITY }, chatId: chat, alertsEnabled: true,
-      nextCheckAt: Date.now() + 1000, defaultCity: true });
+    await this.save({ ...record, city: record.city || { ...DEFAULT_CITY }, chatId: chat, alertsEnabled: true,
+      nextCheckAt: Date.now() + 1000, defaultCity: record.city ? !!record.defaultCity : true });
+    return true;
   }
   async stop(forget = false) {
     await this.storage.put('weatherOptOut', true);
@@ -87,9 +90,11 @@ export class WeatherAssistant {
           await this.send(chat, 'انتخاب شهر منقضی یا نامعتبره؛ دوباره اسم شهر رو با /city بفرست 🌱');
           return true;
         }
-        // Changing cities never silently moves an active alert subscription.
-        await this.save({ city, chatId: chat, alertsEnabled: false, nextCheckAt: null });
-        await this.send(chat, `شهرت ثبت شد: ${city.name} 🌍\nهوا: /weather\nخبر باران، برف و هوای ابری: /alerts\nحذف شهر: /forgetcity\nمختصات تقریبی شهر برای پیش‌بینی به Open-Meteo ارسال می‌شه.`);
+        const optedOut = !!await this.storage.get('weatherOptOut') ||
+          (!record.alertsEnabled && !!(await this.storage.get('followup'))?.disabled);
+        const { candidates, candidatesExpiresAt, ...prior } = record;
+        await this.save({ ...prior, city, chatId: chat, defaultCity: false, alertsEnabled: !optedOut, nextCheckAt: optedOut ? null : Date.now() + 1000 });
+        await this.send(chat, `شهرت ثبت شد: ${city.name} 🌍\nهوا: /weather\n${optedOut ? 'لغو قبلیت حفظ شد؛ خبر خودکار هوا همچنان خاموشه.' : 'خبرهای خودکار هوا روی همین شهر ادامه پیدا می‌کنن؛ فعال‌سازی جدا لازم نیست.'}\nحذف شهر: /forgetcity\nمختصات تقریبی شهر برای پیش‌بینی به Open-Meteo ارسال می‌شه.`);
         return true;
       }
       if (name.length > 100 || name.length < 2) {
@@ -108,7 +113,7 @@ export class WeatherAssistant {
     }
     if (!record.city) record = { ...record, city: { ...DEFAULT_CITY }, defaultCity: true };
     if (command === '/alerts') {
-      await this.send(chat, 'خبر باران، برف و هوای ابری فعال شد 🌧️❄️☁️ هر ساعت بررسی می‌کنم؛ شروع بارش در سه ساعت آینده یا آسمون ابریِ پُرابر رو با یه جملهٔ کوتاه خبر می‌دم. برای ابری حداکثر روزی یک پیام داریم. پیش‌بینی قطعی نیست و خبر دادن قبل از هر بارش تضمین نمی‌شه. لغو: /weatherstop یا /stop');
+      await this.send(chat, 'خبرهای هوا به‌صورت پیش‌فرض فعاله 🌧️❄️☁️ اگر قبلاً لغوش کرده بودی، با این درخواست دوباره روشن می‌شه. لغو: /weatherstop یا /stop');
       await this.storage.delete('weatherOptOut');
       await this.save({ ...record, chatId: chat, alertsEnabled: true, nextCheckAt: Date.now() + 1000 });
       return true;

@@ -21,7 +21,7 @@ function setup() {
   return { state, sent, calls, env, assistant };
 }
 
-test('city selection is explicit and alerts do not activate until requested', async () => {
+test('city selection changes the default-active weather location without requiring alerts', async () => {
   const { state, sent, calls, assistant } = setup();
   await assistant.handle('/city تهران', 42);
   assert.equal(state.get('weather').city, undefined);
@@ -29,7 +29,7 @@ test('city selection is explicit and alerts do not activate until requested', as
   assert.ok(sent.at(-1).text.includes('/city 1'));
   await assistant.handle('/city ۱', 42);
   assert.equal(state.get('weather').city.latitude, 35.69);
-  assert.equal(state.get('weather').alertsEnabled, false);
+  assert.equal(state.get('weather').alertsEnabled, true);
   await assistant.handle('/weather', 42);
   assert.ok(sent.at(-1).text.includes('Open-Meteo'));
   assert.ok(sent.at(-1).text.includes('زمان داده'));
@@ -160,13 +160,13 @@ test('default enrollment preserves weather opt-outs including forget before any 
   }
 });
 
-test('an explicit custom city and its disabled alert preference are never overwritten', async () => {
+test('a selected custom city remains selected and active by default', async () => {
   const { state, assistant } = setup();
   await assistant.handle('/city تهران', 42);
   await assistant.handle('/city 1', 42);
   await assistant.ensureAutomatic(42, true);
   assert.ok(state.get('weather').city.name.includes('تهران'));
-  assert.equal(state.get('weather').alertsEnabled, false);
+  assert.equal(state.get('weather').alertsEnabled, true);
 });
 
 test('failed automatic default disclosure does not enable alerts', async () => {
@@ -326,4 +326,42 @@ test('rain/cloud simulations share the existing once-hourly snow test budget and
   assert.ok(f.sent[2].text.startsWith('🧪 آزمایشی')); assert.ok(f.sent[2].text.includes('خبر واقعی هوای ابری نیست'));
   assert.ok(!f.sent[2].text.includes('منبع: Open-Meteo')); assert.equal(f.calls.length, 0); assert.equal(extras, 0);
   assert.equal(f.state.has('weather'), false);
+});
+
+test('legacy inactive city records migrate to default-on without losing city, candidates or anti-spam claims', async t => {
+  const now = Date.now(); t.mock.method(Date, 'now', () => now);
+  const f = setup();
+  const city = { name: 'شهر دلخواه', latitude: 35.69, longitude: 51.39 };
+  f.state.set('weather', { city, alertsEnabled: false, nextCheckAt: null, chatId: 42, lastCloudAlertAt: now - 3600000, lastAlertAt: now - 7200000 });
+  await f.assistant.ensureAutomatic(42, true);
+  const record = f.state.get('weather'); assert.deepEqual(record.city, city); assert.equal(record.alertsEnabled, true);
+  assert.equal(record.nextCheckAt, now + 1000); assert.equal(record.lastCloudAlertAt, now - 3600000);
+  assert.equal(record.lastAlertAt, now - 7200000); assert.equal(f.calls.length, 0); assert.equal(f.sent.length, 0);
+  await f.assistant.ensureAutomatic(42, true); assert.equal(f.state.get('weather').nextCheckAt, now + 1000);
+});
+
+test('an unfinished city lookup does not prevent default enrollment or automatically select an ambiguous city', async () => {
+  const f = setup(); await f.assistant.handle('/city تهران', 42);
+  const choices = f.state.get('weather').candidates; f.sent.length = 0;
+  await f.assistant.ensureAutomatic(42);
+  assert.equal(f.state.get('weather').city.name, 'آباده، استان فارس');
+  assert.deepEqual(f.state.get('weather').candidates, choices);
+  assert.equal(f.sent.length, 1); await f.assistant.ensureAutomatic(42); assert.equal(f.sent.length, 1);
+});
+
+test('a confirmed city moves default-active notifications but never overrides a prior explicit weather cancellation', async () => {
+  const f = setup(); await f.assistant.stop();
+  await f.assistant.handle('/city تهران', 42); await f.assistant.handle('/city 1', 42);
+  assert.ok(f.state.get('weather').city.name.includes('تهران'));
+  assert.equal(f.state.get('weather').alertsEnabled, false); assert.equal(f.state.get('weather').nextCheckAt, null);
+  await f.assistant.ensureAutomatic(42, true); assert.equal(f.state.get('weather').alertsEnabled, false);
+});
+
+test('city selection preserves legacy global stops but keeps an explicitly restored weather subscription active', async () => {
+  const f = setup(); f.state.set('followup', { disabled: true });
+  await f.assistant.handle('/city تهران', 42); await f.assistant.handle('/city 1', 42);
+  assert.equal(f.state.get('weather').alertsEnabled, false);
+  await f.assistant.handle('/alerts', 42);
+  await f.assistant.handle('/city تهران', 42); await f.assistant.handle('/city 1', 42);
+  assert.equal(f.state.get('weather').alertsEnabled, true);
 });

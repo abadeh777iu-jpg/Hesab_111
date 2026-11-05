@@ -142,7 +142,13 @@ export class ChatSession {
       if (mediaUsage?.expiresAt <= Date.now()) await this.ctx.storage.delete('mediaUsage');
       const instagramUsage = await this.ctx.storage.get('instagramUsage');
       if (instagramUsage?.expiresAt <= Date.now()) await this.ctx.storage.delete('instagramUsage');
-      const weather = await this.ctx.storage.get('weather');
+      let weather = await this.ctx.storage.get('weather');
+      const knownChat = weather?.chatId || followup?.chatId;
+      if (Number.isSafeInteger(knownChat) && knownChat > 0 && (!weather?.alertsEnabled || !Number.isFinite(weather?.nextCheckAt) || weather.nextCheckAt <= 0) &&
+          followup?.noticeShown && !followup.disabled && !await this.ctx.storage.get('weatherOptOut') && await this.canReceiveChannelPost(knownChat)) {
+        await this.ensureDefaultWeather(knownChat);
+        weather = await this.ctx.storage.get('weather');
+      }
       if (weather?.alertsEnabled && weather.nextCheckAt <= Date.now() && membershipRequired(this.env) && await this.membership.check(weather.chatId) !== 'member') {
         // Pause paid weather prose while outside the channel or Telegram is down;
         // preserve the user's existing subscription and explicit opt-out choices.
@@ -186,7 +192,7 @@ export class ChatSession {
     await this.send(chat, needsNotice ? `${START_GREETING}\n\n${FOLLOWUP_NOTICE}` : START_GREETING);
     if (!preference?.disabled) {
       await this.armFollowup(chat, record);
-      await this.weather.ensureAutomatic(chat, needsNotice);
+      await this.weather.ensureAutomatic(chat, needsNotice || !!preference?.noticeShown);
     }
   }
   async ensureAutomaticFollowup(chat, record) {
@@ -196,7 +202,17 @@ export class ChatSession {
     // opt-in subscriptions remain valid, but are informed on their next chat.
     if (!preference?.noticeShown) await this.send(chat, FOLLOWUP_NOTICE);
     await this.armFollowup(chat, record);
-    await this.weather.ensureAutomatic(chat, !preference?.noticeShown);
+    await this.weather.ensureAutomatic(chat, true);
+  }
+  async ensureDefaultWeather(chat) {
+    const preference = await this.ctx.storage.get('followup');
+    if (preference?.disabled) return; // Preserve legacy global /stop and /reset.
+    const changed = await this.weather.ensureAutomatic(chat, !!preference?.noticeShown);
+    if (changed && !preference?.noticeShown) {
+      // The generic notice was delivered by ensureAutomatic. Do not enroll a
+      // check-in or ask a city question just because a feature command was used.
+      await this.ctx.storage.put('followup', { ...preference, noticeShown: true });
+    }
   }
   async telegram(method, body, timeoutMs = 8000) {
     const fetchImpl = this.env.fetchImpl || fetch;
@@ -554,6 +570,7 @@ export class ChatSession {
       if (callback) {
         if (!update.callbackAcknowledged) await this.telegram('answerCallbackQuery', { callback_query_id: callback.id }, 2000).catch(() => {});
         const status = membershipRequired(this.env) ? await this.membership.check(chat) : 'member';
+        if (status === 'member') await this.ensureDefaultWeather(chat);
         if (status === 'member' && isChannelCallback(callback.data)) {
           await this.deliverChannelPost(chat, callback, record);
         } else if (status === 'member' && isMusicCallback(callback.data)) {
@@ -605,7 +622,7 @@ export class ChatSession {
       if (command === '/about') { await this.send(chat, ABOUT); return ok(); }
       if (command === '/privacy') { await this.send(chat, CLOUD_PRIVACY); return ok(); }
       if (command === '/help') {
-        await this.send(chat, '/start سلام و شروع دوباره\n/about دربارهٔ امیر\n/creator ارتباط با سازنده\n/reset پاک‌کردن حافظهٔ فعال گفتگو\n/privacy حریم خصوصی\n/followup فعال‌سازی دوبارهٔ احوال‌پرسی\n/stop لغو همهٔ پیام‌های خودکار\n/image توضیح عکس دلخواه\n/voice سؤال یا خواندن پاسخ قبلی با صدای مصنوعی\n/channel انتخاب از پست‌های جدید کانال\n/song آهنگ از کانال — /clip کلیپ — /quote جمله\n/channelstop لغو پست خودکار کانال — /channelauto فعال‌سازی\nلینک ریلز یا پست ویدئویی عمومی: دریافت ویدئو و دکمهٔ شناسایی موسیقی؛ هر نفر روزی ۵ تلاش برای هر بخش، حداکثر ۲۰ مگابایت\n/date تاریخ، روز هفته و مناسبت‌های ثبت‌شده\n/prices قیمت دلار و طلا\n/news یا «چه خبر؟» اخبار ایران\n/city نام شهر\n/weather وضعیت هوا\n/test_snow یا /test_rain یا /test_cloud تست شخصی و ساختگی هوا\n/alerts فعال‌کردن خبر باران، برف و هوای ابری\n/weatherstop خاموش‌کردن هشدار هوا\n/forgetcity حذف شهر\n\nورودی فقط متن در چت خصوصی؛ عکس و ویس فقط با درخواست خودت، از اعتبار مدیر و با سقف مصرف. هر نفر روزی پنج عکس و سه ویس؛ کل ربات ده عکس و ده ویس (روز UTC). صدای ویس مصنوعیه. من هوش مصنوعی‌ام و جایگزین درمانگر یا خدمات اضطراری نیستم.');
+        await this.send(chat, '/start سلام و شروع دوباره\n/about دربارهٔ امیر\n/creator ارتباط با سازنده\n/reset پاک‌کردن حافظهٔ فعال گفتگو\n/privacy حریم خصوصی\n/followup فعال‌سازی دوبارهٔ احوال‌پرسی\n/stop لغو همهٔ پیام‌های خودکار\n/image توضیح عکس دلخواه\n/voice سؤال یا خواندن پاسخ قبلی با صدای مصنوعی\n/channel انتخاب از پست‌های جدید کانال\n/song آهنگ از کانال — /clip کلیپ — /quote جمله\n/channelstop لغو پست خودکار کانال — /channelauto فعال‌سازی\nلینک ریلز یا پست ویدئویی عمومی: دریافت ویدئو و دکمهٔ شناسایی موسیقی؛ هر نفر روزی ۵ تلاش برای هر بخش، حداکثر ۲۰ مگابایت\n/date تاریخ، روز هفته و مناسبت‌های ثبت‌شده\n/prices قیمت دلار و طلا\n/news یا «چه خبر؟» اخبار ایران\n/city نام شهر\n/weather وضعیت هوا\n/test_snow یا /test_rain یا /test_cloud تست شخصی و ساختگی هوا\n/alerts برگرداندن خبرهای هوا بعد از لغو (پیش‌فرض فعاله)\n/weatherstop خاموش‌کردن هشدار هوا\n/forgetcity حذف شهر\n\nورودی فقط متن در چت خصوصی؛ عکس و ویس فقط با درخواست خودت، از اعتبار مدیر و با سقف مصرف. هر نفر روزی پنج عکس و سه ویس؛ کل ربات ده عکس و ده ویس (روز UTC). صدای ویس مصنوعیه. من هوش مصنوعی‌ام و جایگزین درمانگر یا خدمات اضطراری نیستم.');
         return ok();
       }
       if (isCreatorQuestion(text)) {
@@ -626,6 +643,8 @@ export class ChatSession {
       if (!text) { await this.send(chat, 'فعلاً فقط پیام متنی رو می‌تونم بخونم 🌱'); return ok(); }
       if (text.length > 6000) { await this.send(chat, 'لطفاً پیامت رو به بخش‌های کمتر از ۶۰۰۰ کاراکتر تقسیم کن.'); return ok(); }
       const instagram = instagramRequest(text);
+      const earlyFeature = instagram || parseMediaRequest(text) || channelRequest(text) || isCalendarQuestion(text) || isNewsQuestion(text) || isMarketQuestion(text) || isWeatherQuestion(text) || ['/prices', '/city', '/weather'].includes(command);
+      if (earlyFeature && command !== '/alerts') await this.ensureDefaultWeather(chat);
       if (instagram && !text.startsWith('/')) { await this.handleInstagramVideo(chat, instagram, record, update.webhookURL); return ok(); }
       const mediaRequest = parseMediaRequest(text);
       if (mediaRequest) {
