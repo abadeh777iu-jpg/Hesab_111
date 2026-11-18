@@ -4,6 +4,7 @@ import { instagramRequest, isMusicCallback, InstagramError, instagramFailure, IG
 import { MembershipGate, membershipRequired, JOIN_CALLBACK, JOIN_KEYBOARD, JOIN_TEXT, JOIN_UNAVAILABLE, enableMembershipCallbacks } from './membership.mjs';
 import { CREATOR_REPLY, isCreatorQuestion } from './creator.mjs';
 import { complete, splitMessage, PERSONA_GREETING, HISTORY_LIMIT, START_GREETING, OUTREACH_NOTICE } from './core.mjs';
+import { answerToTelegramVoice, GeminiAudioError } from './gemini-audio.mjs';
 import { handleSetup } from './setup.mjs';
 import { formatReply } from './format.mjs';
 import { WeatherAssistant, nextWeatherWake } from './weather-assistant.mjs';
@@ -296,7 +297,7 @@ export class ChatSession {
     if (media) waitUntil = Math.max(waitUntil, (await this.ctx.storage.get('mediaUsage'))?.lastAt + 60000 || 0);
     if (waitUntil > Date.now()) { await this.inbox.defer(waitUntil - Date.now(), job.id); return; }
     let granted = false;
-    try { granted = (await this.capacity({ op: 'start', id: job.id, kind: media || instagramRequest(text) || isMusicCallback(job.update.callback_query?.data) || isImageCallback(job.update.callback_query?.data) || isChannelCallback(job.update.callback_query?.data) || (automaticChannelPosts(this.env) && (channelRequest(text)?.kind || positiveWeatherContext(text))) ? 'media' : 'text' })).granted; }
+    try { granted = (await this.capacity({ op: 'start', id: job.id, kind: media || job.update.message?.voice || job.update.message?.audio || instagramRequest(text) || isMusicCallback(job.update.callback_query?.data) || isImageCallback(job.update.callback_query?.data) || isChannelCallback(job.update.callback_query?.data) || (automaticChannelPosts(this.env) && (channelRequest(text)?.kind || positiveWeatherContext(text))) ? 'media' : 'text' })).granted; }
     catch { /* Retry admission later, never run without a capacity lease. */ }
     if (!granted) { await this.inbox.defer(undefined, job.id); return; }
     const claimed = await this.inbox.claim(job.id);
@@ -681,7 +682,26 @@ export class ChatSession {
         await this.weather.handle(text, chat);
         return ok();
       }
-      if (!text) { await this.send(chat, 'فعلاً فقط پیام متنی رو می‌تونم بخونم 🌱'); return ok(); }
+      if (message.voice || message.audio) {
+        if (this.env.MEDIA_ENABLED === 'false' || !this.env.MEDIA) { await this.send(chat, 'پاسخ صوتی فعلاً خاموشه 🌱'); return ok(); }
+        const incomingAudio = message.voice || message.audio;
+        if (!incomingAudio?.file_id || !Number.isFinite(incomingAudio.file_size) || incomingAudio.file_size > 5 * 1024 * 1024) {
+          await this.send(chat, 'ویس باید کمتر از ۵ مگابایت باشه 🌱'); return ok();
+        }
+        const denied = await this.reserveMedia('voice');
+        if (denied) { await this.send(chat, denied); return ok(); }
+        try {
+          const answer = await answerToTelegramVoice(this.env, message);
+          await uploadMedia(this.env, chat, 'voice', await generateSpeech(this.env, answer));
+        } catch (error) {
+          const msg = error instanceof GeminiAudioError
+            ? ({ AUDIO_CONFIG: 'کلید یا مدل Gemini تنظیم نیست؛ مدیر باید Secrets کلودفلر رو بررسی کنه 🌱', AUDIO_SIZE: 'ویس باید کمتر از ۵ مگابایت باشه 🌱', AUDIO_FORMAT: 'این قالب ویس پشتیبانی نمی‌شه 🌱', AUDIO_BUSY: 'سهمیه یا سرویس Gemini فعلاً در دسترس نیست؛ کمی بعد امتحان کن 🌱', AUDIO_TELEGRAM: 'نتونستم ویس تلگرام رو دریافت کنم؛ دوباره بفرست 🌱', AUDIO_MODEL: 'مدل Gemini درخواست ویس رو نپذیرفت؛ مدل و دسترسی حساب باید بررسی بشه 🌱', AUDIO_EMPTY: 'از ویس جواب قابل‌استفاده‌ای نگرفتم 🌱' }[error.code] || 'فعلاً نتونستم به ویس جواب بدم 🌱')
+            : mediaFailureMessage(error);
+          await this.send(chat, msg);
+        }
+        return ok();
+      }
+      if (!text) { await this.send(chat, 'فعلاً پیام متنی یا ویس بفرست 🌱'); return ok(); }
       if (text.length > 6000) { await this.send(chat, 'لطفاً پیامت رو به بخش‌های کمتر از ۶۰۰۰ کاراکتر تقسیم کن.'); return ok(); }
       const instagram = instagramRequest(text);
       const earlyFeature = instagram || parseMediaRequest(text) || channelRequest(text) || isCalendarQuestion(text) || isNewsQuestion(text) || isMarketQuestion(text) || isWeatherQuestion(text) || ['/prices', '/city', '/weather'].includes(command);

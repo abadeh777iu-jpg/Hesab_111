@@ -15,7 +15,7 @@ export function compactUpdate(update, webhookURL) {
   if (update.callback_query) {
     const c = update.callback_query;
     out.callback_query = { id: c.id, data: c.data, from: user(c.from), message: { message_id: c.message.message_id, chat: chat(c.message.chat) } };
-  } else out.message = { from: user(update.message.from), chat: chat(update.message.chat), ...(typeof update.message.text === 'string' ? { text: update.message.text.slice(0, 6001) } : {}) };
+  } else out.message = { from: user(update.message.from), chat: chat(update.message.chat), ...(typeof update.message.text === 'string' ? { text: update.message.text.slice(0, 6001) } : {}), ...(update.message.voice ? { voice: { file_id: update.message.voice.file_id, file_size: update.message.voice.file_size, mime_type: update.message.voice.mime_type } } : {}), ...(update.message.audio ? { audio: { file_id: update.message.audio.file_id, file_size: update.message.audio.file_size, mime_type: update.message.audio.mime_type } } : {}) };
   return out;
 }
 export function nextInboxWake(state) {
