@@ -1,5 +1,6 @@
-// Telegram voice-note -> Gemini multimodal understanding. This uses the
-// request/response generateContent API (not the persistent Gemini Live WebSocket).
+// Telegram voice-note understanding and voice generation via Gemini generateContent.
+// This is request/response, not the persistent Gemini Live WebSocket.
+import { pcm16ToMp3 } from './audio.mjs';
 const MAX_AUDIO_BYTES = 5 * 1024 * 1024;
 const MIME_TYPES = new Set(['audio/ogg', 'audio/mpeg', 'audio/mp4', 'audio/wav', 'audio/aac', 'audio/flac']);
 export class GeminiAudioError extends Error {
@@ -54,4 +55,27 @@ export async function answerToTelegramVoice(env, message) {
   const text = result?.candidates?.[0]?.content?.parts?.map(part => part.text || '').join('').trim();
   if (!text) throw new GeminiAudioError('AUDIO_EMPTY');
   return text.slice(0, 1800);
+}
+
+export async function synthesizeGeminiVoice(env, text) {
+  const key = env.GEMINI_API_KEY;
+  const model = (env.GEMINI_TTS_MODEL || 'gemini-2.5-flash-preview-tts').trim();
+  if (!key) throw new GeminiAudioError('AUDIO_CONFIG');
+  const response = await (env.fetchImpl || fetch)(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ contents: [{ parts: [{ text: `به فارسی طبیعی و روشن، این متن را عیناً بخوان. چیزی اضافه نکن: ${text.slice(0, 600)}` }] }],
+      generationConfig: { responseModalities: ['AUDIO'], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: env.GEMINI_TTS_VOICE || 'Charon' } } } } }),
+    signal: AbortSignal.timeout(45_000),
+  });
+  if (!response.ok) throw new GeminiAudioError(response.status === 429 ? 'AUDIO_BUSY' : response.status === 401 || response.status === 403 ? 'AUDIO_CONFIG' : 'AUDIO_MODEL');
+  const result = await response.json();
+  const part = result?.candidates?.[0]?.content?.parts?.find(item => item.inlineData?.data || item.inline_data?.data);
+  const payload = part?.inlineData || part?.inline_data;
+  if (typeof payload?.data !== 'string' || !/^audio\/pcm(?:;|$)/i.test(payload.mimeType || payload.mime_type || '')) throw new GeminiAudioError('AUDIO_EMPTY');
+  let raw;
+  try { raw = atob(payload.data); } catch { throw new GeminiAudioError('AUDIO_EMPTY'); }
+  if (!raw.length || raw.length > MAX_AUDIO_BYTES || raw.length % 2) throw new GeminiAudioError('AUDIO_SIZE');
+  const pcm = Uint8Array.from(raw, char => char.charCodeAt(0));
+  try { return { bytes: pcm16ToMp3(pcm, 24000), type: 'audio/mpeg', filename: 'gemini-voice.mp3' }; }
+  catch { throw new GeminiAudioError('AUDIO_FORMAT'); }
 }

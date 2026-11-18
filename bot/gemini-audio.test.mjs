@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { answerToTelegramVoice, GeminiAudioError } from './gemini-audio.mjs';
+import { answerToTelegramVoice, synthesizeGeminiVoice, GeminiAudioError } from './gemini-audio.mjs';
 
 test('voice message is fetched from Telegram, sent to Gemini, and converted into a Persian answer', async () => {
   const calls = [];
@@ -17,6 +17,20 @@ test('voice message is fetched from Telegram, sent to Gemini, and converted into
   assert.equal(req.contents[0].parts[1].inline_data.mime_type, 'audio/ogg');
   assert.equal(req.contents[0].parts[1].inline_data.data, 'AQID');
   assert.match(calls[2].url, /models\/gemini-2\.5-flash:generateContent/);
+});
+
+test('Gemini creates Persian reply speech directly without OpenRouter', async () => {
+  const pcm = new Uint8Array(4800);
+  for (let i = 0; i < pcm.length; i += 2) new DataView(pcm.buffer).setInt16(i, Math.sin(i / 13) * 7000, true);
+  let request;
+  const file = await synthesizeGeminiVoice({ GEMINI_API_KEY: 'secret', fetchImpl: async (url, init) => {
+    request = { url: String(url), body: JSON.parse(init.body) };
+    return Response.json({ candidates: [{ content: { parts: [{ inlineData: { mimeType: 'audio/pcm;rate=24000', data: Buffer.from(pcm).toString('base64') } }] } }] });
+  } }, 'سلام');
+  assert.match(request.url, /gemini-2\.5-flash-preview-tts:generateContent/);
+  assert.equal(request.body.generationConfig.responseModalities[0], 'AUDIO');
+  assert.equal(file.type, 'audio/mpeg');
+  assert.equal(file.bytes[0], 0xff); // MPEG frame sync
 });
 
 test('voice input rejects oversized Telegram files before any download', async () => {
